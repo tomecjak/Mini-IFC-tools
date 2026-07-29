@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zlúčenie IFC modelov</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div class="sheet">
+  <header class="top">
+    <div class="brand">
+      <div class="eyebrow">IFC · Koordinácia modelov</div>
+      <h1>Zlúčenie IFC modelov</h1>
+      <p class="lede">Z primárneho modelu zostane celá stavebná štruktúra. Zo sekundárneho sa pridajú <b>len vybrané objekty</b> — aj s geometriou, umiestnením, materiálmi a vlastnosťami — zaradené do priestorovej štruktúry primárneho modelu. Všetko prebieha lokálne vo vašom prehliadači.</p>
+    </div>
+    <div class="schematic" aria-hidden="true">
+      <svg viewBox="0 0 230 132" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <pattern id="g" width="9" height="9" patternUnits="userSpaceOnUse">
+            <path d="M9 0H0V9" fill="none" stroke="#E1E6ED" stroke-width="1"/>
+          </pattern>
+        </defs>
+        <!-- blok primárneho modelu -->
+        <g>
+          <rect x="2" y="20" width="66" height="92" fill="url(#g)" stroke="#0E5A8A" stroke-width="1.5"/>
+          <path d="M12 96 V70 H24 V96 M24 82 H40 V96 M40 74 H54 V96" fill="none" stroke="#0E5A8A" stroke-width="2"/>
+          <text x="35" y="14" text-anchor="middle" font-family="'IBM Plex Mono',monospace" font-size="8.5" fill="#0E5A8A">PRIMÁRNY</text>
+        </g>
+        <text x="79" y="70" text-anchor="middle" font-size="15" fill="#8A94A3">+</text>
+        <!-- blok sekundárneho modelu: jednotlivé objekty -->
+        <g>
+          <rect x="88" y="20" width="54" height="92" fill="url(#g)" stroke="#B45309" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <rect x="98" y="40" width="12" height="12" fill="#FBF1E7" stroke="#B45309" stroke-width="1.8"/>
+          <circle cx="124" cy="60" r="7" fill="#FBF1E7" stroke="#B45309" stroke-width="1.8"/>
+          <rect x="104" y="76" width="14" height="10" fill="#FBF1E7" stroke="#B45309" stroke-width="1.8"/>
+          <text x="115" y="14" text-anchor="middle" font-family="'IBM Plex Mono',monospace" font-size="8.5" fill="#B45309">OBJEKTY</text>
+        </g>
+        <path d="M150 66 H166" stroke="#8A94A3" stroke-width="1.5" marker-end="url(#a)"/>
+        <defs><marker id="a" markerWidth="7" markerHeight="7" refX="5" refY="3.2" orient="auto"><path d="M0 0 L6 3.2 L0 6.4 z" fill="#8A94A3"/></marker></defs>
+        <!-- výsledný zlúčený model -->
+        <g>
+          <rect x="170" y="20" width="58" height="92" fill="url(#g)" stroke="#0F7B54" stroke-width="1.8"/>
+          <path d="M178 96 V70 H190 V96 M190 82 H206 V96" fill="none" stroke="#0F7B54" stroke-width="2"/>
+          <rect x="196" y="44" width="10" height="10" fill="#E7F4EE" stroke="#0F7B54" stroke-width="1.8"/>
+          <circle cx="214" cy="58" r="5.5" fill="#E7F4EE" stroke="#0F7B54" stroke-width="1.8"/>
+          <text x="199" y="14" text-anchor="middle" font-family="'IBM Plex Mono',monospace" font-size="8.5" fill="#0F7B54">ZLÚČENÝ</text>
+        </g>
+      </svg>
+    </div>
+  </header>
+
+  <section class="inputs">
+    <div class="panel panel--primary" id="panelA">
+      <div class="panel__head">
+        <span class="panel__tag">Primárny</span>
+        <span class="panel__title">Základ — zostáva</span>
+        <span class="panel__sub" id="subA"></span>
+      </div>
+      <div class="panel__body" id="bodyA"></div>
+    </div>
+
+    <div class="panel panel--secondary" id="panelB">
+      <div class="panel__head">
+        <span class="panel__tag">Sekundárny</span>
+        <span class="panel__title">Zdroj objektov</span>
+        <span class="panel__sub" id="subB"></span>
+      </div>
+      <div class="panel__body" id="bodyB"></div>
+    </div>
+  </section>
+
+  <section class="settings" id="settings" hidden>
+    <div class="settings__grid">
+      <div class="field">
+        <label for="target">Kam vložiť objekty (priestorová štruktúra primárneho modelu)</label>
+        <select id="target"></select>
+        <div class="help">Importované objekty sa zaradia do tohto podlažia / budovy / areálu.</div>
+      </div>
+
+      <div class="field">
+        <span class="legend">Umiestnenie importovaných objektov</span>
+        <div class="radios">
+          <label class="radio"><input type="radio" name="pmode" value="rebase" checked>
+            <span><span class="rt">Zarovnať na cieľový kontajner</span> <span class="rd">— odporúčané. Lokálna poloha objektu sa zachová, ale vztiahne sa na súradnicový systém cieľového podlažia primárneho modelu.</span></span>
+          </label>
+          <label class="radio"><input type="radio" name="pmode" value="preserve">
+            <span><span class="rt">Zachovať pôvodné umiestnenie</span> <span class="rd">— ponechá celý reťazec umiestnenia zo sekundárneho modelu (poloha v jeho vlastnom súradnicovom rámci).</span></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="legend">Manuálny posun (voliteľné)</span>
+        <div class="offset">
+          <label class="num"><span>X</span><input type="number" id="offX" value="0" step="0.1"></label>
+          <label class="num"><span>Y</span><input type="number" id="offY" value="0" step="0.1"></label>
+          <label class="num"><span>Z</span><input type="number" id="offZ" value="0" step="0.1"></label>
+        </div>
+        <div class="help" id="offHelp">V jednotkách primárneho modelu. Pridá sa k polohe každého importovaného objektu.</div>
+      </div>
+
+      <div class="field">
+        <span class="legend">Prenášané údaje</span>
+        <div class="radios">
+          <label class="radio" style="align-items:center"><input type="checkbox" id="copyProps" checked><span class="rt" style="font-weight:500">Property sety (vlastnosti)</span></label>
+          <label class="radio" style="align-items:center"><input type="checkbox" id="copyMats" checked><span class="rt" style="font-weight:500">Materiály</span></label>
+        </div>
+      </div>
+    </div>
+
+    <details class="adv" id="advPrune">
+      <summary>Rozšírené — odstrániť typy z primárneho modelu</summary>
+      <div class="adv__note">Voliteľné. Napr. ak má primárny model vlastný mobiliár, ktorý chcete nahradiť objektmi zo sekundárneho. Odstránia sa aj závislé väzby, ktoré by inak zostali visieť. Používajte opatrne a výstup skontrolujte.</div>
+      <div class="typegrid" id="pruneGrid"></div>
+    </details>
+  </section>
+
+  <div class="action">
+    <button class="btn btn--go" id="mergeBtn" disabled>Zlúčiť modely</button>
+    <span class="mergehint" id="mergeHint">Načítajte oba modely.</span>
+  </div>
+
+  <section class="result" id="result" hidden></section>
+
+  <footer class="notes">
+    <div><b>Na čo myslieť.</b> Nástroj kopíruje entity na úrovni STEP/IFC textu, prečísluje ich a prelinkuje na spoločný reprezentačný kontext a owner history primárneho modelu.</div>
+    <div>Odporúča sa, aby oba modely mali <b>rovnakú IFC schému aj jednotky</b> a zdieľali počiatok súradníc — inak môžu byť objekty posunuté alebo v inej mierke (nástroj na to upozorní).</div>
+    <div>Výsledok si vždy overte vo svojom BIM prehliadači (napr. usporiadanie v strome, polohu a geometriu objektov).</div>
+  </footer>
+</div>
+
+<!-- skryté vstupy na výber súborov (otvárajú sa kliknutím na panely) -->
+<input type="file" id="fileA" accept=".ifc,.IFC" hidden>
+<input type="file" id="fileB" accept=".ifc,.IFC" hidden>
+
+<!-- výpočtové jadro — načítané aj tu, aby fungoval núdzový režim bez Web Workera -->
+<script src="js/ifc-merge.js"></script>
+<!-- obsluha rozhrania -->
+<script src="js/app.js"></script>
+</body>
+</html>
