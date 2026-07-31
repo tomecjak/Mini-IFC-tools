@@ -455,6 +455,23 @@
     return keep;
   }
 
+  // Nájde IfcStyledItem entity zo sekundárneho modelu, ktoré priraďujú farbu/štýl
+  // priamo geometrickej položke (nie cez materiál) — IfcStyledItem odkazuje na
+  // svoju položku dopredu (Item), takže bez tohto kroku ho uzáver závislostí
+  // produktu nikdy nenájde (nič v skopírovanom grafe naň spätne neodkazuje).
+  // Vráti pole ID týchto IfcStyledItem entít, z ktorých sa dá uzáver rozšíriť
+  // (dotiahne sa tak IfcSurfaceStyle/IfcColourRgb a pod.).
+  function collectStyledItemSeeds(model, keptIds) {
+    const seeds = [];
+    for (const e of model.entities.values()) {
+      if (e.type !== "IFCSTYLEDITEM") continue;
+      const a = topLevelArgs(e.body);
+      const m = /^#(\d+)$/.exec((a[0] || "").trim());
+      if (m && keptIds.has(+m[1])) seeds.push(e.id);
+    }
+    return seeds;
+  }
+
   // Nájde v sekundárnom modeli vzťahy, ktoré k importovaným objektom pripájajú
   // property sety / materiály / typy, a vráti {rels:[{ent, keptRelated:[ids]}], defClosure:Set},
   // kde defClosure je doplnkový uzáver definícií na skopírovanie (psety, materiály, typy).
@@ -544,6 +561,14 @@
     if (opts.copyProperties || opts.copyMaterials) {
       defRels = collectDefinitionRels(B, new Set(opts.importIds), opts);
       for (const d of defRels.defClosure) keep.add(d);
+    }
+
+    // 2b) farby/štýly priradené priamo geometrii (IfcStyledItem) — nezávisí od
+    // materiálov ani property setov, ide o vizuálny vzhľad importovaných objektov.
+    const styledSeeds = collectStyledItemSeeds(B, keep);
+    if (styledSeeds.length) {
+      const styleClosure = computeClosure(B, styledSeeds, { cutPlacementRelTo: new Set() });
+      for (const d of styleClosure) keep.add(d);
     }
 
     // 3) pridelenie nových ID všetkým zachovaným entitám zo sekundárneho modelu
