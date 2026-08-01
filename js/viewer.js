@@ -8,7 +8,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var C = window.IFCCode;
   var ROW_H = 20;          // výška riadku v px (musí sedieť s .cl v styles.css)
-  var GUTTER = 66;         // šírka stĺpca s číslami riadkov
+  var PAD = 34;            // vodorovné odsadenie kódu
   var HIT_LIMIT = 5000;    // strop pre počet nájdených riadkov
 
   var st = {
@@ -22,6 +22,7 @@
     typeShown: null,      // triedy práve ponúknuté v zozname (v poradí zobrazenia)
     origArgs: new Map(),  // "príkaz:argument" → pôvodný zápis (kvôli vráteniu zmeny)
     editedStmts: new Set(),
+    onlyEdited: false,    // prepínač „Upravené“ v hornej lište
     catCache: new Map(),
     charW: 7.53,
     from: -1, to: -1      // aktuálne vykreslené okno
@@ -46,6 +47,7 @@
   var UPLOAD_ICON = '<svg class="drop__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4m0 0L7 9m5-5l5 5"/><path d="M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2"/></svg>';
 
   function renderDrop(errorMsg) {
+    $("vwHead").hidden = false;      // úvodný popis nástroja
     $("vwPanel").hidden = false;
     $("vwApp").hidden = true;
     $("vwSub").textContent = "";
@@ -99,9 +101,10 @@
     var idx = st.idx;
     st.visible = null; st.filter = null; st.sel = -1;
     st.hits = []; st.hitPos = -1; st.hist = []; st.from = st.to = -1;
-    st.origArgs = new Map(); st.editedStmts = new Set();
+    st.origArgs = new Map(); st.editedStmts = new Set(); st.onlyEdited = false;
     updateSave();
 
+    $("vwHead").hidden = true;       // po načítaní súboru je popis zbytočný, kód dostane viac miesta
     $("vwPanel").hidden = true;
     $("vwApp").hidden = false;
     $("vwFile").textContent = st.name;
@@ -144,7 +147,7 @@
     var rows = visCount();
     var canvas = $("vwCanvas");
     canvas.style.height = (rows * ROW_H) + "px";
-    var need = GUTTER + 24 + Math.min(st.idx.maxLen, 4000) * st.charW;
+    var need = PAD + Math.min(st.idx.maxLen, 4000) * st.charW;
     canvas.style.width = Math.max(need, $("vwCode").clientWidth) + "px";
   }
 
@@ -165,12 +168,16 @@
 
   function applyFilter() {
     var idx = st.idx;
-    if (!st.filter || !st.filter.size) st.visible = null;
+    var byType = st.filter && st.filter.size;
+    if (!byType && !st.onlyEdited) st.visible = null;
     else {
       var buf = [];
       for (var i = 0; i < idx.lineCount; i++) {
         var s = idx.lineStmt[i];
-        if (s >= 0 && st.filter.has(idx.stmtTypes[s])) buf.push(i);
+        if (s < 0) continue;
+        if (byType && !st.filter.has(idx.stmtTypes[s])) continue;
+        if (st.onlyEdited && !st.editedStmts.has(s)) continue;
+        buf.push(i);
       }
       st.visible = Int32Array.from(buf);
     }
@@ -205,7 +212,6 @@
       if (s >= 0 && s === st.sel) cls += " is-sel";
       if (st.hitLines && st.hitLines.has(li)) cls += (st.hitPos >= 0 && lineOfRow(st.hits[st.hitPos]) === li) ? " is-cur" : " is-hit";
       html += '<div class="' + cls + '" style="top:' + (r * ROW_H) + 'px" data-line="' + li + '">' +
-                '<span class="ln">' + (li + 1) + "</span>" +
                 '<span class="lc">' +
                   C.tokenizeLine(line, {
                     inString: !!idx.startsInStr[li],
@@ -282,12 +288,13 @@
              (d.exact ? "" : " — trieda nie je v schéme tohto súboru") + '">' +
              label + '<span class="doclink__x" aria-hidden="true">↗</span></a>';
   }
-  // Malý štítok, ktorá verzia dokumentácie sa otvorí.
+  // Upozornenie, že odkaz vedie do dokumentácie inej verzie IFC, než hlási súbor.
+  // Pri zhode so schémou súboru sa nič nezobrazuje — to je bežný stav.
   function docNote(type) {
     var d = docInfo(type);
-    if (!d) return "";
-    return '<span class="dt__doc' + (d.exact ? "" : " is-other") + '">' +
-           esc(d.label) + (d.exact ? "" : " · iná verzia") + "</span>";
+    if (!d || d.exact) return "";
+    return '<span class="dt__doc is-other" title="Táto trieda v schéme súboru nie je">' +
+           esc(d.label) + " · iná verzia</span>";
   }
 
   function refChip(id) {
@@ -301,7 +308,9 @@
   }
   function trunc(s, n) { return s.length > n ? s.slice(0, n - 1) + "…" : s; }
 
-  function valHTML(raw, depth) {
+  /* Vykreslenie hodnoty. hideType=true potlačí názov dátového typu, v ktorom je
+     hodnota zabalená (v tabuľke property setov je zbytočný). */
+  function valHTML(raw, depth, hideType) {
     var v = (raw == null ? "" : String(raw)).trim();
     depth = depth || 0;
     if (v === "") return '<i class="t-nil">—</i>';
@@ -323,7 +332,8 @@
              '<span class="t-num">' + esc(trunc(v, 160)) + "</span>";
     }
     var m = /^([A-Za-z_][A-Za-z0-9_]*)\s*\(([\s\S]*)\)$/.exec(v);
-    if (m) return valHTML(m[2], depth + 1) + ' <span class="wrapt">' + esc(m[1]) + "</span>";
+    if (m) return valHTML(m[2], depth + 1, hideType) +
+                  (hideType ? "" : ' <span class="wrapt">' + esc(m[1]) + "</span>");
     if (/^[-+.\d]/.test(v)) return '<span class="t-num">' + esc(v) + "</span>";
     return esc(v);
   }
@@ -373,7 +383,7 @@
                   : qt === "IFCPROPERTYENUMERATEDVALUE" ? qa[2]
                   : qt === "IFCPROPERTYLISTVALUE" ? qa[2]
                   : qa[2];
-        props.push({ name: C.decodeIfcText(qa[0] || ""), value: value, id: +mm[1] });
+        props.push({ name: C.decodeIfcText(qa[0] || ""), value: value, id: +mm[1], type: qt });
       });
       out.push({ name: C.decodeIfcText(pa[2] || ""), id: idx.stmtIds[pi], type: ptype, props: props });
     });
@@ -399,6 +409,12 @@
       var can = canEdit(info, nm, ki, a);
       var changed = st.origArgs.has(sIdx + ":" + i);
       var tip = "Upraviť hodnotu" + (ki && KIND_LABEL[ki.kind] ? " (" + KIND_LABEL[ki.kind] + ")" : "");
+      var vh = valHTML(a);
+      // dátový typ sa píše za hodnotu; ak už hodnota nesie vlastný obal
+      // (napr. IFCLABEL('W-01')), deklarovaný typ sa neopakuje
+      var dtype = an.types && an.types[i];
+      var typeHTML = (dtype && vh.indexOf('class="wrapt"') < 0)
+        ? ' <span class="at__t" title="dátový typ podľa schémy">' + esc(dtype) + "</span>" : "";
       return '<div class="at' + (changed ? " is-edited" : "") + '" data-ai="' + i + '">' +
                '<div class="at__n"><span class="at__i">' + (i + 1) + "</span>" +
                  (nm ? esc(nm)
@@ -406,7 +422,7 @@
                  (changed ? ' <button class="at__undo" data-undo="' + i + '" title="Vrátiť pôvodnú hodnotu">vrátiť</button>' : "") +
                "</div>" +
                '<div class="at__v" data-vi="' + i + '">' +
-                 '<span class="at__val">' + valHTML(a) + "</span>" +
+                 '<span class="at__val">' + vh + typeHTML + "</span>" +
                  (can ? ' <button class="at__edit" data-edit="' + i + '" title="' + esc(tip) + '">✎</button>' : "") +
                "</div>" +
              "</div>";
@@ -415,12 +431,12 @@
     var html =
       '<div class="dt">' +
         '<div class="dt__head">' +
-          (st.hist.length ? '<button class="dt__back" id="dtBack" title="Späť">←</button>' : "") +
           (id >= 0 ? '<span class="dt__id">#' + id + "</span>" : "") +
           docLink(type, "dt__type kc-" + cat) +
+          (st.hist.length ? '<button class="dt__back" id="dtBack" title="Späť na predchádzajúcu entitu">späť</button>' : "") +
         "</div>" +
         '<div class="dt__meta"><span class="dt__cat kc-' + cat + '">' + esc(C.categoryLabel(cat)) + "</span>" +
-          '<button class="linkbtn" id="dtGoto">riadok ' + (idx.stmtFrom[sIdx] + 1).toLocaleString("sk-SK") + "</button>" +
+          (id >= 0 ? '<button class="linkbtn" id="dtGoto">zobraziť v kóde</button>' : "") +
           docNote(type) +
           '<span class="dt__hint" id="dtHint"></span>' +
         "</div>" +
@@ -438,10 +454,11 @@
       var prev = st.hist.pop();
       if (prev != null) selectStmt(prev, false, true);
     });
-    $("dtGoto").addEventListener("click", function () {
+    var goto = $("dtGoto");
+    if (goto) goto.addEventListener("click", function () {
       var r = rowOfLine(idx.stmtFrom[sIdx]);
       if (r >= 0) { scrollToRow(r, true); $("dtHint").textContent = ""; }
-      else $("dtHint").textContent = "riadok skrýva filter tried";
+      else $("dtHint").textContent = "entitu skrýva filter tried";
     });
     var scan = $("dtScan");
     if (scan) scan.addEventListener("click", function () { scanRelations(sIdx); });
@@ -704,10 +721,13 @@
     }
 
     if (newText.length + 1 > idx.maxLen) { idx.maxLen = newText.length + 1; layout(); }
-    render(true);
-    renderDetail(sIdx);
     updateSave();
-    if ($("vwQ").value.trim()) runSearch();
+    if (st.onlyEdited) applyFilter();          // prepočíta, ktoré riadky sú viditeľné
+    else {
+      render(true);
+      if ($("vwQ").value.trim()) runSearch();
+    }
+    renderDetail(sIdx);
   }
   function hasEdits(sIdx) {
     var pref = sIdx + ":", found = false;
@@ -723,7 +743,16 @@
   function updateSave() {
     var n = st.origArgs.size, btn = $("vwSave");
     btn.hidden = n === 0;
-    btn.textContent = "Stiahnuť upravený súbor (" + n + (n === 1 ? " zmena" : n < 5 ? " zmeny" : " zmien") + ")";
+    btn.textContent = "Stiahnuť upravený súbor";
+    btn.title = n + (n === 1 ? " zmenená hodnota" : n < 5 ? " zmenené hodnoty" : " zmenených hodnôt");
+
+    // prepínač „Upravené“ v hornej lište
+    var e = st.editedStmts.size, eb = $("vwEdited");
+    eb.disabled = e === 0;
+    eb.title = e ? "Zobraziť len upravené entity (" + e + ")" : "Zatiaľ ste nič neupravili";
+    $("vwEditedN").textContent = e ? "· " + e : "";
+    if (st.onlyEdited && !e) { st.onlyEdited = false; applyFilter(); }   // po vrátení všetkých zmien
+    eb.classList.toggle("is-on", st.onlyEdited);
   }
   function downloadEdited() {
     if (!st.idx) return;
@@ -746,13 +775,24 @@
       var refs = findReferrers(id, sIdx, 400);
       var psets = psetsFor(sIdx, refs);
 
+      // v property sete sa dá prekliknúť na entitu (do kódu) aj na dokumentáciu triedy
       var ph = psets.map(function (p) {
         var items = p.props.map(function (pr) {
-          return '<div class="pr"><span class="pr__n">' + esc(pr.name || "(bez názvu)") + "</span>" +
-                 '<span class="pr__v">' + valHTML(pr.value, 1) + "</span></div>";
+          return '<div class="pr">' +
+                   '<span class="pr__n">' +
+                     '<button class="pr__go" data-goid="' + pr.id + '" title="Zobraziť entitu #' + pr.id + " · " + esc(pr.type) + '">' +
+                       esc(pr.name || "(bez názvu)") + "</button>" +
+                     docLink(pr.type, "pr__t", "↗") +
+                   "</span>" +
+                   '<span class="pr__v">' + valHTML(pr.value, 1, true) + "</span>" +
+                 "</div>";
         }).join("");
-        return '<div class="pset"><div class="pset__h">' + esc(p.name || "(bez názvu)") +
-               docLink(p.type, "pset__t", p.type.replace(/^IFC/, "")) + "</div>" +
+        return '<div class="pset"><div class="pset__h">' +
+                 '<button class="pset__go" data-goid="' + p.id + '" title="Zobraziť entitu #' + p.id + " · " + esc(p.type) + '">' +
+                   esc(p.name || "(bez názvu)") + "</button>" +
+                 '<span class="pset__id">#' + p.id + "</span>" +
+                 docLink(p.type, "pset__t", p.type.replace(/^IFC/, "")) +
+               "</div>" +
                (items || '<div class="dt__none">bez vlastností</div>') + "</div>";
       }).join("");
 
@@ -880,8 +920,9 @@
     var n = st.filter ? st.filter.size : 0;
     $("vwFilterN").textContent = n ? "· " + n : "";
     $("vwFilter").classList.toggle("is-on", !!n);
+    $("vwEdited").classList.toggle("is-on", st.onlyEdited);
     var vis = visCount();
-    $("vwVisible").textContent = n
+    $("vwVisible").textContent = (n || st.onlyEdited)
       ? vis.toLocaleString("sk-SK") + " z " + st.idx.lineCount.toLocaleString("sk-SK") + " riadkov"
       : "";
     renderTypeCount();
@@ -895,7 +936,6 @@
       if (e.target.files[0]) handleFile(e.target.files[0]);
       e.target.value = "";
     });
-    $("vwChange").addEventListener("click", function () { st.idx = null; renderDrop(); });
 
     var code = $("vwCode");
     code.addEventListener("scroll", function () { render(false); });
@@ -948,6 +988,13 @@
       renderTypeList(this.value);
       $("vwTypeList").scrollTop = 0;
     });
+    // prepínač „Upravené“ — zobrazí len entity, v ktorých ste niečo zmenili
+    $("vwEdited").addEventListener("click", function () {
+      if (!st.editedStmts.size) return;
+      st.onlyEdited = !st.onlyEdited;
+      applyFilter();
+    });
+
     $("vwTypeQ").addEventListener("keydown", function (e) {
       if (e.key === "Enter") {                 // Enter zapne/vypne prvú ponúknutú triedu
         e.preventDefault();
@@ -968,6 +1015,9 @@
       });
     });
   }
+
+  // Nahratie nového súboru — volá sa z tlačidla v hornej lište (js/nav.js).
+  window.ViewerTool = { reset: function () { st.idx = null; renderDrop(); } };
 
   // ---- štart ---------------------------------------------------------------
   if ($("vwPanel")) { wire(); renderDrop(); }

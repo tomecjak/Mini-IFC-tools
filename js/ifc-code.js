@@ -488,7 +488,7 @@
     var A = root.IFCAttrs;
     if (A) {
       var r = A.attrsFor(t, schema, args ? args.length : 0);
-      if (r) return { names: r.names, kinds: r.kinds, exact: r.exact, version: r.version };
+      if (r) return { names: r.names, kinds: r.kinds, types: r.types, exact: r.exact, version: r.version };
     }
     if (ATTRS[t]) return { names: ATTRS[t], exact: true };
     var rooted = args && args.length >= 4 && /^'[0-9A-Za-z_$]{22}'$/.test((args[0] || "").trim());

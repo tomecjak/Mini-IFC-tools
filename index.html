@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IFC nástroje</title>
+<title>Mini IFC tools</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -13,9 +13,10 @@
 
 <!-- horná lišta (mimo rozcestníka) -->
 <div class="appbar" id="appbar" hidden>
-  <a class="appbar__back" href="#/">← Nástroje</a>
+  <a class="appbar__brand" href="#/" title="Späť na výber nástrojov">Mini IFC tools</a>
   <span class="appbar__sep">/</span>
   <span class="appbar__title" id="appbarTitle"></span>
+  <button class="appbar__btn" id="barReset" hidden>Nahrať nové súbory</button>
 </div>
 
 <!-- ======================= ROZCESTNÍK ======================= -->
@@ -23,7 +24,7 @@
   <header class="top">
     <div class="brand">
       <div class="eyebrow">IFC · Nástroje pre prácu s modelmi</div>
-      <h1>IFC nástroje</h1>
+      <h1>Mini IFC tools</h1>
       <p class="lede">Sada malých nástrojov na prácu so súbormi IFC (STEP / ISO-10303-21). Všetko beží lokálne vo vašom prehliadači — žiadny súbor sa nikam neodosiela. Vyberte si nástroj:</p>
     </div>
     <div class="schematic" aria-hidden="true">
@@ -90,7 +91,7 @@
 
 <!-- ======================= NÁSTROJ 1 — ZLÚČENIE ======================= -->
 <div class="sheet view" id="view-merge">
-  <header class="top">
+  <header class="top" id="mgHead">
     <div class="brand">
       <div class="eyebrow">IFC · Koordinácia modelov</div>
       <h1>Zlúčenie IFC modelov</h1>
@@ -214,7 +215,7 @@
 
 <!-- ======================= NÁSTROJ 2 — PREHLIADAČ KÓDU ======================= -->
 <div class="sheet sheet--wide view" id="view-viewer">
-  <header class="top">
+  <header class="top" id="vwHead">
     <div class="brand">
       <div class="eyebrow">IFC · Zdrojový kód</div>
       <h1>Prehliadač IFC kódu</h1>
@@ -253,7 +254,6 @@
       <span class="vw__file" id="vwFile"></span>
       <span class="chiprow" id="vwChips"></span>
       <button class="btn btn--ghost btn--sm" id="vwSave" hidden>Stiahnuť upravený súbor</button>
-      <button class="linkbtn" id="vwChange">zmeniť súbor</button>
     </div>
 
     <div class="vw__tools">
@@ -308,6 +308,8 @@
         </div>
       </details>
 
+      <button class="toolbtn" id="vwEdited" disabled title="Zatiaľ ste nič neupravili">Upravené <span id="vwEditedN"></span></button>
+
       <span class="vw__visible" id="vwVisible"></span>
     </div>
 
@@ -326,6 +328,12 @@
     <div><b>Dokumentácia.</b> Názov triedy v paneli vpravo je odkaz do oficiálnej dokumentácie buildingSMART pre <b>verziu schémy z nahraného súboru</b> (IFC2x3 TC1, IFC4 ADD2 TC1 alebo IFC4.3) — otvorí sa v novej záložke. Ak daná trieda v schéme súboru nie je (napr. novšia trieda v staršom modeli), odkaz vedie do najbližšej verzie a štítok pri ňom na to upozorní.</div>
   </footer>
 </div>
+
+<footer class="sitefoot">
+  <span class="sitefoot__brand">Mini IFC tools</span>
+  <span class="sitefoot__sep">·</span>
+  <a href="https://github.com/tomecjak" target="_blank" rel="noopener noreferrer">VibeCode by Jakub</a>
+</footer>
 
 <!-- skryté vstupy na výber súborov -->
 <input type="file" id="fileA" accept=".ifc,.IFC" hidden>

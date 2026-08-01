@@ -93,6 +93,7 @@
   // ---- zóny na pretiahnutie súborov ---------------------------------------
   function renderDrop(slot, errorMsg){
     var body = $(slot==="A"?"bodyA":"bodyB");
+    $(slot==="A"?"subA":"subB").textContent = "";   // zahodiť údaje o predošlom modeli
     body.innerHTML =
       '<div class="drop" data-slot="'+slot+'">'+
         UPLOAD_ICON+
@@ -272,6 +273,8 @@
   // ---- nastavenia ---------------------------------------------------------
   function syncSettings(){
     var ready = state.A && state.B;
+    // úvodný popis nástroja ustúpi, až keď sú načítané oba modely
+    $("mgHead").hidden = !!ready;
     $("settings").hidden = !ready;
     if(ready){
       // možnosti cieľového kontajnera
@@ -400,7 +403,19 @@
   $("fileA").addEventListener("change", function(e){ if(e.target.files[0]) handleFile("A", e.target.files[0]); e.target.value=""; });
   $("fileB").addEventListener("change", function(e){ if(e.target.files[0]) handleFile("B", e.target.files[0]); e.target.value=""; });
 
+  // Nahratie nových modelov — volá sa z tlačidla v hornej lište (js/nav.js).
+  window.MergeTool = { reset: function(){
+    state = { A:null, B:null };
+    selected = new Set();
+    lastResult = null;
+    $("result").hidden = true; $("result").innerHTML = "";
+    renderDrop("A"); renderDrop("B");
+    syncSettings();
+    window.scrollTo(0, 0);
+  } };
+
   // ---- inicializácia ------------------------------------------------------
   renderDrop("A");
   renderDrop("B");
+  syncSettings();
 })();
