@@ -683,8 +683,10 @@
     }
 
     // 8) zostavenie výsledného textu
-    const lines = [];
-    lines.push(...primaryLines);
+    // POZOR: nikdy nie `lines.push(...primaryLines)` — spread odovzdá každý riadok
+    // ako samostatný argument volania a pri modeli so stotisícmi entít to prekročí
+    // veľkosť zásobníka volaní („Maximum call stack size exceeded“).
+    const lines = primaryLines.slice();
     lines.push(`/* ==== objekty importované zo sekundárneho modelu ==== */`);
     for (const e of emitted) lines.push(`#${e.id}=${e.body};`);
     for (const e of newRelEntities) lines.push(`#${e.id}=${e.body};`);

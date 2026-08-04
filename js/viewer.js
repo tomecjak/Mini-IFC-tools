@@ -7,16 +7,18 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   var C = window.IFCCode;
-  var ROW_H = 20;          // výška riadku v px (musí sedieť s .cl v styles.css)
-  var PAD = 34;            // vodorovné odsadenie kódu
+  var ROW_H = 22;          // výška riadku v px (musí sedieť s .cl v styles.css)
+  var PAD = 40;            // vodorovné odsadenie kódu (.lc)
   var HIT_LIMIT = 5000;    // strop pre počet nájdených riadkov
 
   var st = {
     name: "", size: 0, idx: null,
     visible: null,        // Int32Array indexov riadkov, alebo null = všetky
+    visEntities: null,    // koľko entít prejde filtrom (null = všetky)
     filter: null,         // Set vybraných tried, alebo null = bez filtra
     sel: -1,              // vybraný príkaz (index do stmt polí)
     hits: [], hitPos: -1, // nájdené riadky (pozície vo viditeľnom zozname)
+    directHit: false,     // hľadanie „#123“ skočilo rovno na entitu
     hist: [],             // história preklikov v paneli detailu
     typeQuery: "",        // text v poli „Nájsť triedu…“
     typeShown: null,      // triedy práve ponúknuté v zozname (v poradí zobrazenia)
@@ -46,16 +48,28 @@
   // =========================================================================
   var UPLOAD_ICON = '<svg class="drop__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4m0 0L7 9m5-5l5 5"/><path d="M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2"/></svg>';
 
+  function panel() { return $("vwPanel"); }
+  function setHead(tag, title, sub) {
+    panel().querySelector(".panel__tag").textContent = tag;
+    $("vwTitle").textContent = title;
+    $("vwSub").textContent = sub || "";
+  }
+
   function renderDrop(errorMsg) {
     $("vwHead").hidden = false;      // úvodný popis nástroja
-    $("vwPanel").hidden = false;
+    panel().hidden = false;
+    panel().classList.toggle("is-error", !!errorMsg);
     $("vwApp").hidden = true;
-    $("vwSub").textContent = "";
+    if (window.AppBar) { AppBar.setStatus("prehliadač zdrojového kódu"); AppBar.setBadge(""); }
+    setHead(errorMsg ? "chyba" : "súbor",
+            errorMsg ? "súbor sa nepodarilo načítať" : "nahrajte IFC alebo STEP",
+            ".ifc · .step · .stp");
     $("vwBody").innerHTML =
-      '<div class="drop" id="vwDrop">' + UPLOAD_ICON +
-        '<div class="drop__main">Presuňte sem IFC súbor</div>' +
-        '<div class="drop__hint">alebo kliknite pre výber · formát <b>.ifc</b> · súbor zostáva vo vašom počítači</div>' +
-        (errorMsg ? '<div class="errline">' + esc(errorMsg) + "</div>" : "") +
+      (errorMsg ? '<div class="note note--bad" style="margin-bottom:12px"><span class="note__i">✕</span>' +
+                  "<span>" + esc(errorMsg) + "</span></div>" : "") +
+      '<div class="drop drop--tall" id="vwDrop">' + UPLOAD_ICON +
+        '<div class="drop__main">' + (errorMsg ? "skúsiť iný súbor" : "presuňte sem súbor") + "</div>" +
+        '<div class="drop__hint">alebo kliknite pre výber · súbor zostáva vo vašom počítači</div>' +
       "</div>";
     var dz = $("vwDrop");
     dz.addEventListener("click", function () { $("fileV").click(); });
@@ -68,27 +82,34 @@
   }
 
   function progress(label, pct) {
+    panel().classList.remove("is-error");
+    setHead("súbor", pct == null ? "načítava sa" : "indexujem", pct == null ? "" : Math.round(pct * 100) + " %");
     $("vwBody").innerHTML =
-      '<div class="drop drop--busy">' +
-        '<div class="spinner" style="border-color:rgba(0,0,0,.15);border-top-color:#0E5A8A"></div>' +
-        '<div class="drop__main" style="margin-top:10px">' + esc(label) + "</div>" +
-        '<div class="pbar"><i style="width:' + Math.round(pct * 100) + '%"></i></div>' +
+      '<div class="drop drop--busy drop--tall">' +
+        (pct == null ? '<div class="spinner"></div>' : "") +
+        '<div class="drop__main">' + esc(label) + "</div>" +
+        '<div class="drop__hint">' + esc(st.name) + " · " +
+          Math.round(st.size / 1024).toLocaleString("sk-SK") + " kB</div>" +
+        (pct == null ? "" : '<div class="pbar pbar--sec"><i style="width:' + Math.round(pct * 100) + '%"></i></div>') +
       "</div>";
   }
 
   function handleFile(file) {
     st.name = file.name; st.size = file.size;
-    progress("Čítam " + file.name + "…", 0.05);
+    progress("číta sa súbor…", null);
     var reader = new FileReader();
     reader.onload = function () {
-      progress("Analyzujem štruktúru súboru…", 0.1);
-      C.indexFile(reader.result, function (p) { progress("Analyzujem štruktúru súboru…", 0.1 + p * 0.9); })
+      progress("analyzujem štruktúru súboru…", 0);
+      C.indexFile(reader.result, function (p) { progress("analyzujem štruktúru súboru…", p); })
         .then(function (idx) {
-          if (!idx.entityCount) throw new Error("V súbore sa nenašli žiadne IFC entity (#ID = TRIEDA(...)).");
+          if (!idx.entityCount) {
+            throw new Error("V súbore sa nenašli žiadne IFC entity v tvare #ID = TRIEDA(…). " +
+                            "Skontrolujte, či ide o STEP zápis IFC a nie o zip alebo ifcXML.");
+          }
           st.idx = idx; st.catCache = new Map();
           startViewer();
         })
-        .catch(function (err) { renderDrop("Súbor sa nepodarilo spracovať: " + err.message); });
+        .catch(function (err) { renderDrop(err.message); });
     };
     reader.onerror = function () { renderDrop("Chyba pri čítaní súboru."); };
     reader.readAsText(file);
@@ -100,22 +121,22 @@
   function startViewer() {
     var idx = st.idx;
     st.visible = null; st.filter = null; st.sel = -1;
-    st.hits = []; st.hitPos = -1; st.hist = []; st.from = st.to = -1;
+    st.hits = []; st.hitPos = -1; st.hist = []; st.from = st.to = -1; st.directHit = false;
+    $("vwQ").value = ""; $("vwHits").textContent = "";   // hľadanie patrí predošlému súboru
     st.origArgs = new Map(); st.editedStmts = new Set(); st.onlyEdited = false;
     updateSave();
 
     $("vwHead").hidden = true;       // po načítaní súboru je popis zbytočný, kód dostane viac miesta
-    $("vwPanel").hidden = true;
+    panel().hidden = true;
     $("vwApp").hidden = false;
-    $("vwFile").textContent = st.name;
+    if (window.AppBar) AppBar.setStatus(st.name);
     $("vwChips").innerHTML =
-      '<span class="chip">schéma <b>' + esc(idx.schema) + "</b></span>" +
-      (idx.lengthUnit !== "?" ? '<span class="chip">jednotka <b>' + esc(idx.lengthUnit) + "</b></span>"
-                              : '<span class="chip chip--warn">jednotka neurčená</span>') +
-      '<span class="chip"><b>' + idx.entityCount.toLocaleString("sk-SK") + "</b> entít</span>" +
-      '<span class="chip"><b>' + idx.types.length + "</b> tried</span>" +
-      '<span class="chip"><b>' + idx.lineCount.toLocaleString("sk-SK") + "</b> riadkov</span>" +
-      '<span class="chip">' + Math.round(st.size / 1024).toLocaleString("sk-SK") + " kB</span>";
+      '<div class="m">schéma <b>' + esc(idx.schema) + "</b></div>" +
+      (idx.lengthUnit !== "?" ? '<div class="m">jednotka <b>' + esc(idx.lengthUnit) + "</b></div>"
+                              : '<div class="m is-warn">jednotka neurčená</div>') +
+      '<div class="m">entity <b>' + idx.entityCount.toLocaleString("sk-SK") + "</b></div>" +
+      '<div class="m">triedy <b>' + idx.types.length + "</b></div>" +
+      '<div class="m">' + Math.round(st.size / 1024).toLocaleString("sk-SK") + " kB</div>";
 
     measureChar();
     $("vwTypeQ").value = "";
@@ -169,17 +190,20 @@
   function applyFilter() {
     var idx = st.idx;
     var byType = st.filter && st.filter.size;
-    if (!byType && !st.onlyEdited) st.visible = null;
+    if (!byType && !st.onlyEdited) { st.visible = null; st.visEntities = null; }
     else {
-      var buf = [];
+      var buf = [], ents = 0;
       for (var i = 0; i < idx.lineCount; i++) {
         var s = idx.lineStmt[i];
         if (s < 0) continue;
         if (byType && !st.filter.has(idx.stmtTypes[s])) continue;
         if (st.onlyEdited && !st.editedStmts.has(s)) continue;
+        // entita sa počíta raz, aj keď je jej zápis rozpísaný na viac riadkov
+        if (idx.stmtFrom[s] === i && idx.stmtIds[s] >= 0) ents++;
         buf.push(i);
       }
       st.visible = Int32Array.from(buf);
+      st.visEntities = ents;
     }
     st.from = st.to = -1;
     layout();
@@ -222,6 +246,38 @@
               "</div>";
     }
     $("vwRows").innerHTML = html;
+    syncEmpty();
+  }
+
+  // Prázdny stav plochy s kódom — filter alebo hľadanie nič nenechali.
+  function syncEmpty() {
+    var box = $("vwEmpty");
+    if (!box) return;
+    var q = $("vwQ").value.trim();
+    var nFilter = st.filter ? st.filter.size : 0;
+    var noRows = visCount() === 0;
+    var noHits = !noRows && !!q && !st.directHit && st.hits.length === 0;
+    $("vwQ").parentNode.classList.toggle("is-empty", noHits);
+    // plocha s kódom sa prázdnym stavom nahradí, nie prekryje
+    $("vwCanvas").hidden = noRows || noHits;
+    if (!noRows && !noHits) { box.hidden = true; box.innerHTML = ""; return; }
+    $("vwCode").scrollTop = 0;
+
+    var why = noRows
+      ? (st.onlyEdited ? "Zobrazujú sa len upravené entity a filter tried ich všetky odfiltroval."
+                       : "Vybrané triedy sa v tomto súbore nevyskytujú.")
+      : "Hľadá sa len medzi <b>zobrazenými</b> entitami." +
+        (nFilter ? " Zapnuté sú " + nFilter + " triedy — zrušte filter alebo hľadajte inak." : "");
+
+    box.hidden = false;
+    box.innerHTML =
+      "<h3>" + (noRows ? "žiadna zobrazená entita" : "žiadna entita nezodpovedá hľadaniu") + "</h3>" +
+      "<p>" + why + "</p>" +
+      '<div class="row">' +
+        (nFilter ? '<button class="btn btn--sm" data-clear="filter">zrušiť filter tried</button>' : "") +
+        (q ? '<button class="btn btn--sm btn--ghost" data-clear="query">vymazať hľadanie</button>' : "") +
+        (st.onlyEdited ? '<button class="btn btn--sm btn--ghost" data-clear="edited">zobraziť všetky entity</button>' : "") +
+      "</div>";
   }
 
   function scrollToRow(r, center) {
@@ -257,9 +313,10 @@
 
   function showEmptyDetail() {
     $("vwSide").innerHTML =
+      '<div class="dt__sec" style="border-top:none;margin-top:0;padding-top:0">detail entity</div>' +
       '<div class="dt dt--empty">' +
-        "<p>Kliknite na ktorýkoľvek riadok kódu.</p>" +
-        "<p>Zobrazí sa rozpis atribútov entity podľa IFC schémy, jej property sety a zoznam entít, ktoré sa na ňu odkazujú.</p>" +
+        "<p>Kliknite na ktorúkoľvek entitu v kóde.</p>" +
+        "<p>Zobrazí sa rozpis jej atribútov podľa IFC schémy, property sety a zoznam entít, ktoré sa na ňu odkazujú.</p>" +
       "</div>";
   }
 
@@ -433,18 +490,22 @@
         '<div class="dt__head">' +
           (id >= 0 ? '<span class="dt__id">#' + id + "</span>" : "") +
           docLink(type, "dt__type kc-" + cat) +
-          (st.hist.length ? '<button class="dt__back" id="dtBack" title="Späť na predchádzajúcu entitu">späť</button>' : "") +
+          (st.hist.length ? '<button class="dt__back" id="dtBack" title="Späť na predchádzajúcu entitu">← späť</button>' : "") +
         "</div>" +
-        '<div class="dt__meta"><span class="dt__cat kc-' + cat + '">' + esc(C.categoryLabel(cat)) + "</span>" +
+        // kategória triedy patrí pod jej názov — v hlavičke by tlačidlo „späť“
+        // odsúvala tým viac, čím dlhší je názov triedy
+        '<div class="dt__cat kc-' + cat + '">' + esc(C.categoryLabel(cat)) + "</div>" +
+        '<div class="dt__meta">' +
           (id >= 0 ? '<button class="linkbtn" id="dtGoto">zobraziť v kóde</button>' : "") +
+          '<span class="dt__where">' + args.length + " atribútov</span>" +
           docNote(type) +
           '<span class="dt__hint" id="dtHint"></span>' +
         "</div>" +
-        (args.length ? '<div class="dt__sec">Atribúty <span>' + args.length + "</span>" + anNote + "</div>" +
+        (args.length ? '<div class="dt__sec">atribúty <span>' + args.length + "</span>" + anNote + "</div>" +
                        '<div class="dt__attrs">' + rows + "</div>"
-                     : '<div class="dt__sec">Atribúty</div><div class="dt__none">bez argumentov</div>') +
-        '<div class="dt__sec">Vlastnosti a väzby</div>' +
-        '<div id="dtRefs"><button class="btn btn--ghost btn--sm" id="dtScan">Nájsť property sety a odkazy</button></div>' +
+                     : '<div class="dt__sec">atribúty</div><div class="dt__none">bez argumentov</div>') +
+        '<div class="dt__sec">vlastnosti a väzby</div>' +
+        '<div id="dtRefs"><button class="btn btn--ghost btn--sm" id="dtScan">nájsť property sety a odkazy</button></div>' +
       "</div>";
     side.innerHTML = html;
     side.scrollTop = 0;
@@ -743,8 +804,11 @@
   function updateSave() {
     var n = st.origArgs.size, btn = $("vwSave");
     btn.hidden = n === 0;
-    btn.textContent = "Stiahnuť upravený súbor";
+    btn.textContent = "stiahnuť upravený ↓";
     btn.title = n + (n === 1 ? " zmenená hodnota" : n < 5 ? " zmenené hodnoty" : " zmenených hodnôt");
+    if (window.AppBar) {
+      AppBar.setBadge(n ? n + (n === 1 ? " zmena" : n < 5 ? " zmeny" : " zmien") : "");
+    }
 
     // prepínač „Upravené“ v hornej lište
     var e = st.editedStmts.size, eb = $("vwEdited");
@@ -812,12 +876,17 @@
   // =========================================================================
   function runSearch() {
     if (!st.idx) return;
+    // kód musí byť viditeľný skôr, než sa naň posunieme na prvú zhodu
+    $("vwCanvas").hidden = false;
     var q = $("vwQ").value.trim();
-    st.hits = []; st.hitPos = -1; st.hitLines = null;
+    st.hits = []; st.hitPos = -1; st.hitLines = null; st.directHit = false;
     if (!q) { $("vwHits").textContent = ""; render(true); return; }
 
+    // hľadanie tvaru #123 skočí rovno na entitu — nie je to zhoda v riadkoch,
+    // ale ani prázdny výsledok (st.directHit to odlíši pre prázdny stav)
     var direct = /^#(\d+)$/.exec(q);
     if (direct && st.idx.byId.has(+direct[1])) {
+      st.directHit = true;
       selectId(+direct[1], true);
       $("vwHits").textContent = "entita #" + direct[1];
       return;
@@ -921,9 +990,9 @@
     $("vwFilterN").textContent = n ? "· " + n : "";
     $("vwFilter").classList.toggle("is-on", !!n);
     $("vwEdited").classList.toggle("is-on", st.onlyEdited);
-    var vis = visCount();
     $("vwVisible").textContent = (n || st.onlyEdited)
-      ? vis.toLocaleString("sk-SK") + " z " + st.idx.lineCount.toLocaleString("sk-SK") + " riadkov"
+      ? (st.visEntities || 0).toLocaleString("sk-SK") + " z " +
+        st.idx.entityCount.toLocaleString("sk-SK") + " entít"
       : "";
     renderTypeCount();
   }
@@ -940,6 +1009,16 @@
     var code = $("vwCode");
     code.addEventListener("scroll", function () { render(false); });
     window.addEventListener("resize", function () { if (st.idx) { layout(); render(true); } });
+
+    // tlačidlá v prázdnom stave plochy s kódom
+    $("vwEmpty").addEventListener("click", function (e) {
+      var b = e.target.closest("[data-clear]");
+      if (!b) return;
+      var what = b.getAttribute("data-clear");
+      if (what === "filter") { st.filter = null; renderTypeList(st.typeQuery); applyFilter(); }
+      else if (what === "query") { $("vwQ").value = ""; runSearch(); }
+      else if (what === "edited") { st.onlyEdited = false; applyFilter(); }
+    });
 
     code.addEventListener("click", function (e) {
       var ref = e.target.closest(".t-ref");
@@ -1017,7 +1096,22 @@
   }
 
   // Nahratie nového súboru — volá sa z tlačidla v hornej lište (js/nav.js).
-  window.ViewerTool = { reset: function () { st.idx = null; renderDrop(); } };
+  window.ViewerTool = {
+    reset: function () {
+      st.idx = null; st.origArgs = new Map(); st.editedStmts = new Set();
+      $("vwSave").hidden = true;
+      renderDrop();
+    },
+    // po prepnutí na tento nástroj doplní do lišty názov súboru, počet zmien
+    // a tlačidlo na stiahnutie upravenej kópie
+    syncBar: function () {
+      if (!window.AppBar) return;
+      AppBar.setStatus(st.idx ? st.name : "prehliadač zdrojového kódu");
+      var n = st.origArgs.size;
+      AppBar.setBadge(n ? n + (n === 1 ? " zmena" : n < 5 ? " zmeny" : " zmien") : "");
+      $("vwSave").hidden = n === 0;
+    }
+  };
 
   // ---- štart ---------------------------------------------------------------
   if ($("vwPanel")) { wire(); renderDrop(); }

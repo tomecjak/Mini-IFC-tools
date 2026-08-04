@@ -90,16 +90,36 @@
 
   var UPLOAD_ICON = '<svg class="drop__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4m0 0L7 9m5-5l5 5"/><path d="M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2"/></svg>';
 
+  function panelEl(slot){ return $(slot==="A"?"panelA":"panelB"); }
+  function bodyEl(slot){ return $(slot==="A"?"bodyA":"bodyB"); }
+  function subEl(slot){ return $(slot==="A"?"subA":"subB"); }
+  function titleEl(slot){ return panelEl(slot).querySelector(".panel__title"); }
+  function tagEl(slot){ return panelEl(slot).querySelector(".panel__tag"); }
+
+  // Vráti hlavičku panela do východiskového stavu (názov, štítok, farba).
+  function resetHead(slot){
+    var p = panelEl(slot);
+    p.classList.remove("is-error");
+    tagEl(slot).textContent = slot==="A" ? "A · primárny" : "B · sekundárny";
+    titleEl(slot).textContent = slot==="A" ? "základ — zostáva" : "zdroj objektov";
+    subEl(slot).textContent = "";
+  }
+
   // ---- zóny na pretiahnutie súborov ---------------------------------------
   function renderDrop(slot, errorMsg){
-    var body = $(slot==="A"?"bodyA":"bodyB");
-    $(slot==="A"?"subA":"subB").textContent = "";   // zahodiť údaje o predošlom modeli
+    var body = bodyEl(slot);
+    resetHead(slot);
+    if(errorMsg){
+      panelEl(slot).classList.add("is-error");
+      tagEl(slot).textContent = "chyba";
+      titleEl(slot).textContent = "súbor sa nepodarilo načítať";
+    }
     body.innerHTML =
+      (errorMsg?'<div class="note note--bad" style="margin-bottom:12px"><span class="note__i">✕</span><span>'+esc(errorMsg)+'</span></div>':'')+
       '<div class="drop" data-slot="'+slot+'">'+
         UPLOAD_ICON+
-        '<div class="drop__main">Presuňte sem IFC súbor</div>'+
-        '<div class="drop__hint">alebo kliknite pre výber · formát <b>.ifc</b></div>'+
-        (errorMsg?'<div class="errline">'+esc(errorMsg)+'</div>':'')+
+        '<div class="drop__main">'+(errorMsg?'skúsiť iný súbor':'presuňte sem .ifc')+'</div>'+
+        '<div class="drop__hint">alebo kliknite pre výber</div>'+
       '</div>';
     var dz = body.querySelector(".drop");
     dz.addEventListener("click", function(){ $(slot==="A"?"fileA":"fileB").click(); });
@@ -111,71 +131,106 @@
     });
   }
 
+  // Priebeh nahrávania: pri čítaní súboru sa ukazuje skutočné percento,
+  // pri parsovaní (jeho dĺžku dopredu nepoznáme) len otáčajúci sa indikátor.
+  function renderBusy(slot, label, file, pct){
+    titleEl(slot).textContent = pct==null ? "analyzuje sa" : "číta sa súbor";
+    subEl(slot).textContent = pct==null ? "" : Math.round(pct*100) + " %";
+    bodyEl(slot).innerHTML =
+      '<div class="drop drop--busy">'+
+        (pct==null?'<div class="spinner"></div>':'')+
+        '<div class="drop__main">'+esc(label)+'</div>'+
+        '<div class="drop__hint">'+esc(file.name)+' · '+Math.round(file.size/1024).toLocaleString("sk-SK")+' kB</div>'+
+        (pct==null?'':'<div class="pbar"><i style="width:'+Math.round(pct*100)+'%"></i></div>')+
+      '</div>';
+  }
+
   function handleFile(slot, file){
-    var body = $(slot==="A"?"bodyA":"bodyB");
-    body.innerHTML = '<div class="drop"><div class="spinner" style="border-color:rgba(0,0,0,.15);border-top-color:'+(slot==="A"?"#0E5A8A":"#B45309")+'"></div><div class="drop__main" style="margin-top:10px">Analyzujem '+esc(file.name)+'…</div></div>';
+    resetHead(slot);
+    panelEl(slot).classList.remove("is-error");
+    renderBusy(slot, "číta sa súbor…", file, 0);
     var reader = new FileReader();
+    reader.onprogress = function(e){
+      if(e.lengthComputable) renderBusy(slot, "číta sa súbor…", file, e.loaded/e.total);
+    };
     reader.onload = function(){
+      renderBusy(slot, "analyzujem štruktúru súboru…", file, null);
       engine.parse(slot, reader.result).then(function(res){
-        state[slot] = { name:file.name, summary:res.summary };
+        state[slot] = { name:file.name, size:file.size, summary:res.summary };
         if(slot==="A") renderSummaryA(); else { initSelection(res.summary); renderSummaryB(); }
         syncSettings();
       }).catch(function(err){
         state[slot] = null;
-        renderDrop(slot, "Súbor sa nepodarilo načítať: " + err.message);
+        renderDrop(slot, err.message);
         syncSettings();
       });
     };
-    reader.onerror = function(){ renderDrop(slot, "Chyba pri čítaní súboru."); };
+    reader.onerror = function(){ state[slot] = null; renderDrop(slot, "Chyba pri čítaní súboru."); syncSettings(); };
     reader.readAsText(file);
   }
 
   // ---- súhrny načítaných modelov ------------------------------------------
-  function unitChip(u){
-    var known = {mm:"mm", cm:"cm", dm:"dm", m:"m", km:"km"};
-    return known[u] ? '<span class="chip">jednotka <b>'+u+'</b></span>'
-                    : '<span class="chip chip--warn">jednotka neurčená</span>';
+  var KNOWN_UNITS = {mm:1, cm:1, dm:1, m:1, km:1};
+  function unitKnown(u){ return !!KNOWN_UNITS[u]; }
+
+  function metric(k, v, warn){
+    return '<div class="metric'+(warn?' is-warn':'')+'">'+
+             '<div class="metric__k">'+esc(k)+'</div><div class="metric__v">'+esc(v)+'</div>'+
+           '</div>';
   }
-  function summaryChips(s){
-    return '<div class="chiprow">'+
-      '<span class="chip">schéma <b>'+esc(s.schema)+'</b></span>'+
-      unitChip(s.lengthUnit)+
-      '<span class="chip"><b>'+s.entityCount.toLocaleString("sk-SK")+'</b> entít</span>'+
+  function metricsHTML(slot){
+    var s = state[slot].summary, last;
+    if(slot==="A") last = metric("typy", s.breakdown.length);
+    else {
+      var n = s.objects.reduce(function(a,g){return a+g.items.length;},0);
+      last = metric("objekty", n);
+    }
+    return '<div class="metrics">'+
+      metric("schéma", s.schema) +
+      metric("jednotka", unitKnown(s.lengthUnit) ? s.lengthUnit : "neurčená", !unitKnown(s.lengthUnit)) +
+      metric("entity", s.entityCount.toLocaleString("sk-SK")) +
+      last +
     '</div>';
   }
   function breakdownHTML(s){
     var rows = s.breakdown.slice(0,60).map(function(b){
-      return '<div class="t">'+esc(pretty(b.type))+'</div><div class="c">'+b.count+'</div>';
+      return '<div class="t">'+esc(pretty(b.type))+'</div><div class="c">'+b.count.toLocaleString("sk-SK")+'</div>';
     }).join("");
-    return '<details class="breakdown"><summary>Zloženie modelu ('+s.breakdown.length+' typov)</summary><div class="bd-grid">'+rows+'</div></details>';
+    return '<details class="breakdown"><summary>zloženie modelu ('+s.breakdown.length+' typov)</summary>'+
+           '<div class="bd-grid">'+rows+'</div></details>';
   }
   function fileLine(slot){
     var st = state[slot];
     return '<div class="file-line"><span class="name">'+esc(st.name)+'</span>'+
-           '<button class="linkbtn" data-change="'+slot+'">zmeniť</button></div>';
+           '<button class="linkbtn'+(slot==="B"?' linkbtn--sec':'')+'" data-change="'+slot+'">zmeniť</button></div>';
   }
 
   function renderSummaryA(){
     var s = state.A.summary;
+    resetHead("A");
     $("subA").textContent = "#…"+s.maxId;
     $("bodyA").innerHTML =
-      '<div class="summary">'+ fileLine("A") + summaryChips(s) + breakdownHTML(s) +'</div>';
+      '<div class="summary">'+ fileLine("A") + metricsHTML("A") + breakdownHTML(s) +'</div>';
     wireChange();
   }
 
   function renderSummaryB(){
     var s = state.B.summary;
+    resetHead("B");
     $("subB").textContent = "#…"+s.maxId;
     var total = s.objects.reduce(function(n,g){return n+g.items.length;},0);
-    var html = '<div class="summary">'+ fileLine("B") + summaryChips(s);
+    var html = '<div class="summary">'+ fileLine("B") + metricsHTML("B");
     if(total === 0){
-      html += '<div class="errline">V tomto modeli sa nenašli žiadne objekty zaradené v priestorovej štruktúre (IfcRelContainedInSpatialStructure). Nie je čo importovať.</div>';
+      titleEl("B").textContent = "nič na import";
+      html += '<div class="note note--warn"><span class="note__i">!</span>'+
+        '<span>Model neobsahuje objekty zaradené v priestorovej štruktúre '+
+        '(<code>IfcRelContainedInSpatialStructure</code>) — nie je čo importovať.</span></div>';
     } else {
       html += '<div class="objsel">'+
         '<div class="objsel__bar">'+
           '<span class="objsel__count" id="selCount"></span>'+
-          '<button class="linkbtn" data-selall="1">Vybrať všetko</button>'+
-          '<button class="linkbtn" data-selnone="1">Zrušiť výber</button>'+
+          '<button class="minibtn" data-selall="1">všetko</button>'+
+          '<button class="minibtn" data-selnone="1">nič</button>'+
         '</div>'+
         '<div class="objsel__list" id="objList">'+ objTreeHTML(s.objects) +'</div>'+
       '</div>';
@@ -198,7 +253,7 @@
           '<input type="checkbox" class="grp-cb" data-type="'+esc(g.type)+'">'+
           '<svg class="grp__caret" viewBox="0 0 10 10" fill="currentColor"><path d="M3 1l4 4-4 4z"/></svg>'+
           '<span class="grp__type">'+esc(pretty(g.type))+'</span>'+
-          '<span class="grp__n">'+g.items.length+'</span>'+
+          '<span class="grp__n" data-n="'+esc(g.type)+'"></span>'+
         '</div>'+
         '<div class="grp__items">'+items+'</div>'+
       '</div>';
@@ -252,9 +307,13 @@
       var sel = g.items.filter(function(it){return selected.has(it.id);}).length;
       cb.checked = sel === g.items.length && sel>0;
       cb.indeterminate = sel>0 && sel<g.items.length;
+      var grp = cb.closest(".grp");
+      if(grp) grp.classList.toggle("is-checked", sel>0);
+      var n = list.querySelector('.grp__n[data-n="'+cssEsc(g.type)+'"]');
+      if(n) n.textContent = sel + " / " + g.items.length;
     });
     var total = groups.reduce(function(n,g){return n+g.items.length;},0);
-    var c = $("selCount"); if(c) c.textContent = "Vybraté: " + selected.size + " / " + total;
+    var c = $("selCount"); if(c) c.textContent = "vybraté " + selected.size + " / " + total;
     updateMergeBtn();
   }
   function cssEsc(s){ return s.replace(/"/g,'\\"'); }
@@ -270,12 +329,54 @@
     });
   }
 
+  // ---- porovnanie modelov -------------------------------------------------
+  // Rozdielna schéma alebo jednotka dĺžky znamená, že objekty môžu prísť
+  // v inej mierke — zobrazí sa porovnávacia tabuľka.
+  function syncMismatch(){
+    var box = $("mismatch");
+    if(!(state.A && state.B)){ box.hidden = true; box.innerHTML = ""; return; }
+    var a = state.A.summary, b = state.B.summary;
+    var au = unitKnown(a.lengthUnit) ? a.lengthUnit : "neurčená";
+    var bu = unitKnown(b.lengthUnit) ? b.lengthUnit : "neurčená";
+    var schemaBad = a.schema !== b.schema;
+    var unitBad = au !== bu || !unitKnown(b.lengthUnit);
+    if(!schemaBad && !unitBad){ box.hidden = true; box.innerHTML = ""; return; }
+
+    box.hidden = false;
+    box.innerHTML =
+      '<div class="panel__head">'+
+        '<span class="panel__tag" style="background:var(--warn)">nesúlad</span>'+
+        '<span class="panel__title">modely sa nezhodujú</span>'+
+      '</div>'+
+      '<div class="mismatch__body">'+
+        '<div class="mm">'+
+          '<div class="h">&nbsp;</div><div class="ha">A · primárny</div><div class="hb">B · sekundárny</div>'+
+          '<div class="k">schéma</div><div>'+esc(a.schema)+'</div>'+
+            '<div'+(schemaBad?' class="bad"':'')+'>'+esc(b.schema)+'</div>'+
+          '<div class="k">jednotka</div><div>'+esc(au)+'</div>'+
+            '<div'+(unitBad?' class="bad"':'')+'>'+esc(bu)+'</div>'+
+        '</div>'+
+        '<div class="mismatch__note">Objekty môžu byť v inej mierke. Zlúčenie je možné, ale výstup si dôkladne skontrolujte.</div>'+
+      '</div>';
+  }
+
+  // ---- horná lišta --------------------------------------------------------
+  function syncBar(){
+    if(!window.AppBar) return;
+    var n = (state.A?1:0) + (state.B?1:0);
+    if(!n){ AppBar.setStatus("zlúčenie modelov"); return; }
+    var txt = n === 1 ? "1 model načítaný" : "2 modely načítané";
+    if(state.B) txt += " · " + selected.size + " objektov vybraných";
+    AppBar.setStatus(txt);
+  }
+
   // ---- nastavenia ---------------------------------------------------------
   function syncSettings(){
     var ready = state.A && state.B;
     // úvodný popis nástroja ustúpi, až keď sú načítané oba modely
     $("mgHead").hidden = !!ready;
     $("settings").hidden = !ready;
+    syncMismatch();
     if(ready){
       // možnosti cieľového kontajnera
       var sel = $("target"); sel.innerHTML = "";
@@ -287,7 +388,8 @@
       });
       // poznámka o jednotke posunu
       var u = state.A.summary.lengthUnit;
-      $("offHelp").textContent = "V jednotkách primárneho modelu" + (u&&u!=="?"?(" ("+u+")"):"") + ". Pridá sa k polohe každého importovaného objektu.";
+      $("offLegend").textContent = "manuálny posun" + (unitKnown(u) ? " · " + u : " (voliteľné)");
+      $("offHelp").textContent = "V jednotkách primárneho modelu" + (unitKnown(u)?(" ("+u+")"):"") + ". Pridá sa k polohe každého importovaného objektu.";
       // zoznam typov primárneho modelu, ktoré sa dajú odstrániť
       var grid = $("pruneGrid");
       var pobjs = state.A.summary.objects;
@@ -306,10 +408,17 @@
   function updateMergeBtn(){
     var btn = $("mergeBtn"), hint = $("mergeHint");
     var ready = state.A && state.B;
-    if(!ready){ btn.disabled = true; hint.textContent = state.A ? "Načítajte sekundárny model." : (state.B ? "Načítajte primárny model." : "Načítajte oba modely."); return; }
-    if(selected.size === 0){ btn.disabled = true; hint.textContent = "Vyberte aspoň jeden objekt na import."; return; }
+    syncBar();
+    if(!ready){
+      btn.disabled = true;
+      hint.textContent = state.A ? "// načítajte sekundárny model"
+                       : state.B ? "// načítajte primárny model"
+                                 : "// načítajte oba modely";
+      return;
+    }
+    if(selected.size === 0){ btn.disabled = true; hint.textContent = "// vyberte aspoň jeden objekt na import"; return; }
     btn.disabled = false;
-    hint.textContent = "Pridá sa " + selected.size + " objekt(ov) do primárneho modelu.";
+    hint.textContent = "// pridá sa " + selected.size + " objektov do " + state.A.name;
   }
 
   // ---- zlúčenie -----------------------------------------------------------
@@ -328,19 +437,22 @@
       primaryExcludeTypes: pruneTypes
     };
     btn.disabled = true;
-    var orig = btn.textContent; btn.innerHTML = '<span class="spinner"></span> Zlučujem…';
+    var orig = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span> zlučujem…';
     $("mergeHint").textContent = "";
     engine.merge(opts).then(function(res){
       lastResult = res;
       renderResult(res);
-      btn.disabled = false; btn.textContent = orig;
+      btn.disabled = false; btn.innerHTML = orig;
       updateMergeBtn();
       $("result").scrollIntoView({behavior:"smooth", block:"start"});
     }).catch(function(err){
-      btn.disabled = false; btn.textContent = orig;
+      btn.disabled = false; btn.innerHTML = orig;
+      updateMergeBtn();
       $("result").hidden = false;
-      $("result").innerHTML = '<div class="result__head"><h2>Chyba</h2><span class="badge badge--bad">zlyhalo</span></div>'+
-        '<div class="result__body"><div class="errline">Zlúčenie zlyhalo: '+esc(err.message)+'</div></div>';
+      $("result").innerHTML =
+        '<div class="result__head"><h2>výsledok zlúčenia</h2><span class="badge badge--bad">zlyhalo</span></div>'+
+        '<div class="result__body"><div class="note note--bad"><span class="note__i">✕</span>'+
+          '<span>Zlúčenie zlyhalo: '+esc(err.message)+'</span></div></div>';
     });
   });
 
@@ -355,46 +467,53 @@
     var el = $("result"); el.hidden = false;
 
     var warns = (r.warnings||[]).length
-      ? '<div class="warnbox"><b>Upozornenia</b>'+ r.warnings.map(function(w){return '<div>'+esc(w)+'</div>';}).join("") +'</div>'
+      ? '<div class="note note--warn"><span class="note__i">!</span><span><b>Upozornenie.</b> '+
+        r.warnings.map(esc).join("<br>") +'</span></div>'
       : '';
 
     var stats = '<div class="stats">'+
-      statHTML("Importované objekty", r.importedProducts) +
-      statHTML("Skopírované entity", r.copiedEntities) +
-      statHTML("Nové väzby", r.copiedRelationships) +
-      statHTML("Entít vo výstupe", (r.totalEntitiesOut||0).toLocaleString("sk-SK")) +
-      statHTML("Cieľový kontajner", null, r.targetContainer) +
-      (r.droppedFromPrimary ? statHTML("Odstránené z primárneho", r.droppedFromPrimary) : "") +
+      statHTML("importované", r.importedProducts) +
+      statHTML("skopírované entity", (r.copiedEntities||0).toLocaleString("sk-SK")) +
+      statHTML("nové väzby", r.copiedRelationships) +
+      statHTML("entít vo výstupe", (r.totalEntitiesOut||0).toLocaleString("sk-SK")) +
+      statHTML("kontajner", null, r.targetContainer) +
+      (r.droppedFromPrimary ? statHTML("odstránené z primárneho", r.droppedFromPrimary) : "") +
     '</div>';
 
     var valid = v.ok
-      ? '<div class="valid ok">✓ Súbor je konzistentný — žiadne visiace referencie, žiadne duplicitné ID, práve jeden IFCPROJECT. Entít: '+v.count.toLocaleString("sk-SK")+'.</div>'
-      : '<div class="valid bad"><div>⚠ Nájdené problémy ('+v.problems.length+'):</div><ul>'+
+      ? '<div class="valid ok"><span>✓</span><span>žiadne visiace referencie · žiadne duplicitné ID · '+
+        'práve jeden IFCPROJECT · '+v.count.toLocaleString("sk-SK")+' entít</span></div>'
+      : '<div class="valid bad"><div>⚠ nájdené problémy ('+v.problems.length+'):</div><ul>'+
           v.problems.slice(0,15).map(function(p){return '<li>'+esc(p)+'</li>';}).join("")+
           (v.problems.length>15?'<li>… a ďalšie</li>':'')+'</ul></div>';
 
     var sizeKB = lastResult ? Math.round(new Blob([lastResult.ifc]).size/1024) : 0;
     var dl = '<div class="dlrow">'+
-      '<button class="btn btn--ghost" id="dlBtn">Stiahnuť IFC ('+sizeKB.toLocaleString("sk-SK")+' kB)</button>'+
-      '<span class="mergehint">Overte výsledok vo svojom BIM prehliadači.</span>'+
+      '<button class="btn btn--dl" id="dlBtn">stiahnuť .ifc ↓</button>'+
+      '<span class="mergehint">// '+esc(outName())+'</span>'+
     '</div>';
 
     el.innerHTML =
-      '<div class="result__head"><h2>Výsledok zlúčenia</h2>'+
+      '<div class="result__head"><h2>výsledok zlúčenia</h2>'+
         (v.ok?'<span class="badge badge--ok">konzistentné</span>':'<span class="badge badge--bad">skontrolujte</span>')+
+        '<span class="result__size">'+sizeKB.toLocaleString("sk-SK")+' kB</span>'+
       '</div>'+
       '<div class="result__body">'+ warns + stats + valid + dl +'</div>';
 
     $("dlBtn").addEventListener("click", downloadResult);
   }
 
+  function outName(){
+    var base = (state.A && state.A.name || "model").replace(/\.[^.]+$/,"");
+    return base + "_zluceny.ifc";
+  }
+
   function downloadResult(){
     if(!lastResult) return;
-    var base = (state.A && state.A.name || "model").replace(/\.[^.]+$/,"");
     var blob = new Blob([lastResult.ifc], {type:"application/octet-stream"});
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
-    a.href = url; a.download = base + "_zluceny.ifc";
+    a.href = url; a.download = outName();
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
   }
@@ -404,15 +523,18 @@
   $("fileB").addEventListener("change", function(e){ if(e.target.files[0]) handleFile("B", e.target.files[0]); e.target.value=""; });
 
   // Nahratie nových modelov — volá sa z tlačidla v hornej lište (js/nav.js).
-  window.MergeTool = { reset: function(){
-    state = { A:null, B:null };
-    selected = new Set();
-    lastResult = null;
-    $("result").hidden = true; $("result").innerHTML = "";
-    renderDrop("A"); renderDrop("B");
-    syncSettings();
-    window.scrollTo(0, 0);
-  } };
+  window.MergeTool = {
+    reset: function(){
+      state = { A:null, B:null };
+      selected = new Set();
+      lastResult = null;
+      $("result").hidden = true; $("result").innerHTML = "";
+      renderDrop("A"); renderDrop("B");
+      syncSettings();
+      window.scrollTo(0, 0);
+    },
+    syncBar: syncBar
+  };
 
   // ---- inicializácia ------------------------------------------------------
   renderDrop("A");

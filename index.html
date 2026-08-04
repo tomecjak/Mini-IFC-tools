@@ -3,141 +3,114 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mini IFC tools</title>
+<title>mini-ifc/tools</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
 
-<!-- horná lišta (mimo rozcestníka) -->
-<div class="appbar" id="appbar" hidden>
-  <a class="appbar__brand" href="#/" title="Späť na výber nástrojov">Mini IFC tools</a>
-  <span class="appbar__sep">/</span>
-  <span class="appbar__title" id="appbarTitle"></span>
-  <button class="appbar__btn" id="barReset" hidden>Nahrať nové súbory</button>
-</div>
+<!-- ======================= HORNÁ LIŠTA ======================= -->
+<header class="bar" id="appbar">
+  <a class="bar__logo" href="#/" title="Späť na výber nástrojov">
+    <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M20 6 H6 V58 H20" fill="none" stroke="currentColor" stroke-width="7"/>
+      <path d="M44 6 H58 V58 H44" fill="none" stroke="currentColor" stroke-width="7"/>
+      <rect x="26" y="18" width="12" height="12" fill="#176B54"/>
+      <rect x="26" y="34" width="12" height="12" fill="#B65418"/>
+    </svg>
+    <span>mini-ifc<span class="bar__slash">/</span>tools</span>
+  </a>
+  <span class="bar__pipe">|</span>
+  <span class="bar__tool" id="barTool"></span>
+  <span class="bar__sub" id="barSub"></span>
+  <span class="bar__badge" id="barBadge" hidden></span>
+  <span class="bar__gap"></span>
+  <button class="bar__btn bar__btn--go" id="vwSave" hidden>stiahnuť upravený ↓</button>
+  <button class="bar__btn" id="barReset" hidden></button>
+</header>
 
 <!-- ======================= ROZCESTNÍK ======================= -->
 <div class="sheet view" id="view-home">
-  <header class="top">
-    <div class="brand">
-      <div class="eyebrow">IFC · Nástroje pre prácu s modelmi</div>
-      <h1>Mini IFC tools</h1>
-      <p class="lede">Sada malých nástrojov na prácu so súbormi IFC (STEP / ISO-10303-21). Všetko beží lokálne vo vašom prehliadači — žiadny súbor sa nikam neodosiela. Vyberte si nástroj:</p>
+
+  <section class="hero">
+    <div class="card hero__main">
+      <div class="kicker kicker--sec">// lokálne nástroje</div>
+      <h1>Upravuj IFC súbory<br>priamo v prehliadači.</h1>
+      <p class="lede">Nástroje pracujú s textovou podobou IFC (STEP / ISO-10303-21). Súbory sa  nikam neukladajú — prehľadávanie, editácia aj zlučovanie beží len vo vašom prehliadači.</p>
+      <div class="facts">
+        <div class="fact"><div class="fact__k">Schémy</div><div class="fact__v">2x3 · 4 · 4.3</div></div>
+        <div class="fact"><div class="fact__k">Limit</div><div class="fact__v">~200 MB</div></div>
+        <div class="fact"><div class="fact__k">Upload</div><div class="fact__v is-ok">žiadny</div></div>
+      </div>
     </div>
-    <div class="schematic" aria-hidden="true">
-      <svg viewBox="0 0 200 120" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <pattern id="gh" width="9" height="9" patternUnits="userSpaceOnUse">
-            <path d="M9 0H0V9" fill="none" stroke="#E1E6ED" stroke-width="1"/>
-          </pattern>
-        </defs>
-        <rect x="2" y="10" width="94" height="100" fill="url(#gh)" stroke="#0E5A8A" stroke-width="1.5"/>
-        <path d="M14 96 V64 H30 V96 M30 78 H52 V96 M52 68 H72 V96" fill="none" stroke="#0E5A8A" stroke-width="2"/>
-        <rect x="110" y="10" width="88" height="100" fill="#fff" stroke="#B45309" stroke-width="1.5"/>
-        <path d="M118 26 H160 M118 38 H182 M118 50 H150 M118 62 H176 M118 74 H142 M118 86 H168 M118 98 H154"
-              stroke="#B45309" stroke-width="2.5" stroke-linecap="round" opacity=".55"/>
-        <path d="M118 38 H140" stroke="#157F4C" stroke-width="2.5" stroke-linecap="round"/>
-        <path d="M118 62 H136" stroke="#8A5A2B" stroke-width="2.5" stroke-linecap="round"/>
-      </svg>
+
+    <div class="sample" aria-hidden="true">
+      <div class="sample__c">// ukážka zápisu</div>
+      <div><span class="t-ref">#2118</span><span class="t-punc">= </span><span class="kc-element t-cls">IFCWALL</span><span class="t-punc">(</span><span class="t-guid">'2mZb…8xQ'</span><span class="t-punc">,</span><span class="t-ref">#5</span><span class="t-punc">,</span></div>
+      <div class="sample__i"><span class="t-str">'Stena-14'</span><span class="t-punc">,$,</span><span class="t-str">'Nosná 300'</span><span class="t-punc">,</span></div>
+      <div class="sample__i"><span class="t-ref">#2112</span><span class="t-punc">,</span><span class="t-ref">#2115</span><span class="t-punc">,</span><span class="t-str">'W-14'</span><span class="t-punc">,</span><span class="t-enum">.SOLIDWALL.</span><span class="t-punc">);</span></div>
+      <div class="sample__c sample__gap">// atribúty podľa schémy súboru</div>
+      <div><span class="sample__k">Name</span><span class="t-punc"> → </span><span class="t-str">Stena-14</span><span class="t-punc"> · IfcLabel</span></div>
+      <div><span class="sample__k">PredefinedType</span><span class="t-punc"> → </span><span class="t-enum">SOLIDWALL</span></div>
     </div>
-  </header>
+  </section>
+
+  <div class="note note--warn note--mobile">Nástroje sú stavané na desktop — na telefóne si ich viete pozrieť, ale prácu s modelom robte na počítači.</div>
 
   <section class="tools">
     <a class="tool tool--merge" href="#/merge">
-      <div class="tool__glyph" aria-hidden="true">
-        <svg viewBox="0 0 64 44" xmlns="http://www.w3.org/2000/svg">
-          <rect x="1" y="4" width="22" height="36" fill="#EAF2F8" stroke="#0E5A8A" stroke-width="1.6"/>
-          <rect x="27" y="10" width="9" height="9" fill="#FBF1E7" stroke="#B45309" stroke-width="1.6"/>
-          <circle cx="31.5" cy="30" r="4.5" fill="#FBF1E7" stroke="#B45309" stroke-width="1.6"/>
-          <path d="M40 22 H49" stroke="#8A94A3" stroke-width="1.6"/>
-          <path d="M46 18 L50 22 L46 26" fill="none" stroke="#8A94A3" stroke-width="1.6"/>
-          <rect x="52" y="4" width="11" height="36" fill="#E7F4EE" stroke="#0F7B54" stroke-width="1.6"/>
-        </svg>
+      <div class="tool__b">
+        <div class="tool__h">
+          <span class="tool__no">[01]</span>
+          <span class="tool__name">merge</span>
+          <span class="tool__sub">zlúčenie modelov</span>
+        </div>
+        <p>Primárny model si drží stavebnú štruktúru, zo sekundárneho pridáte vybrané objekty s geometriou, umiestnením, materiálmi a property setmi.</p>
+        <ul class="tool__list">
+          <li>výber objektov po triedach</li>
+          <li>rebase na cieľové podlažie + manuálny posun</li>
+          <li>validácia výstupu pred stiahnutím</li>
+        </ul>
       </div>
-      <h2>Zlúčenie IFC modelov</h2>
-      <p>Z primárneho modelu zostane celá stavebná štruktúra, zo sekundárneho pridáte len vybrané objekty — aj s geometriou, umiestnením, materiálmi a vlastnosťami.</p>
-      <span class="tool__go">Otvoriť nástroj →</span>
+      <span class="tool__go">otvoriť merge <span class="tool__arr">→</span></span>
     </a>
 
     <a class="tool tool--view" href="#/viewer">
-      <div class="tool__glyph" aria-hidden="true">
-        <svg viewBox="0 0 64 44" xmlns="http://www.w3.org/2000/svg">
-          <rect x="1" y="4" width="62" height="36" fill="#fff" stroke="#CBD3DE" stroke-width="1.6"/>
-          <path d="M1 12 H63" stroke="#CBD3DE" stroke-width="1.2"/>
-          <path d="M13 4 V40" stroke="#E1E6ED" stroke-width="1.2"/>
-          <path d="M18 19 H30" stroke="#0E5A8A" stroke-width="2.4" stroke-linecap="round"/>
-          <path d="M33 19 H44" stroke="#9A6700" stroke-width="2.4" stroke-linecap="round"/>
-          <path d="M47 19 H56" stroke="#1D4ED8" stroke-width="2.4" stroke-linecap="round"/>
-          <path d="M18 26 H26" stroke="#157F4C" stroke-width="2.4" stroke-linecap="round"/>
-          <path d="M29 26 H41" stroke="#0B7285" stroke-width="2.4" stroke-linecap="round"/>
-          <path d="M18 33 H35" stroke="#7C3AED" stroke-width="2.4" stroke-linecap="round"/>
-          <path d="M38 33 H50" stroke="#B02A37" stroke-width="2.4" stroke-linecap="round"/>
-        </svg>
+      <div class="tool__b">
+        <div class="tool__h">
+          <span class="tool__no">[02]</span>
+          <span class="tool__name">code</span>
+          <span class="tool__sub">prehliadač zdrojového kódu</span>
+        </div>
+        <p>Zvýraznený STEP zápis, virtualizovaný na stovky tisíc entít. Kliknutá entita rozpíše atribúty podľa schémy, property sety a väzby.</p>
+        <ul class="tool__list">
+          <li>hľadanie textu, triedy alebo #ID</li>
+          <li>filter tried s počtami výskytov</li>
+          <li>úprava hodnôt + export kópie</li>
+        </ul>
       </div>
-      <h2>Prehliadač IFC kódu</h2>
-      <p>Zobrazí zdrojový kód nahraného súboru s farebným zvýraznením tried a hodnôt. Po kliknutí na riadok rozpíše jeho atribúty podľa IFC schémy, property sety aj väzby na ostatné entity.</p>
-      <span class="tool__go">Otvoriť nástroj →</span>
+      <span class="tool__go">otvoriť code <span class="tool__arr">→</span></span>
     </a>
   </section>
 
-  <footer class="notes">
-    <div><b>Ako to funguje.</b> Nástroje pracujú priamo s textovou podobou IFC (STEP fyzický súbor). Nič sa neodosiela na server, súbory neopustia váš počítač.</div>
-    <div>Odporúčaný prehliadač: Chrome, Edge, Firefox alebo Safari v aktuálnej verzii. Veľmi veľké modely (nad ~200 MB) môžu naraziť na pamäťový limit prehliadača.</div>
-  </footer>
 </div>
 
 <!-- ======================= NÁSTROJ 1 — ZLÚČENIE ======================= -->
 <div class="sheet view" id="view-merge">
-  <header class="top" id="mgHead">
-    <div class="brand">
-      <div class="eyebrow">IFC · Koordinácia modelov</div>
-      <h1>Zlúčenie IFC modelov</h1>
-      <p class="lede">Z primárneho modelu zostane celá stavebná štruktúra. Zo sekundárneho sa pridajú <b>len vybrané objekty</b> — aj s geometriou, umiestnením, materiálmi a vlastnosťami — zaradené do priestorovej štruktúry primárneho modelu. Všetko prebieha lokálne vo vašom prehliadači.</p>
-    </div>
-    <div class="schematic" aria-hidden="true">
-      <svg viewBox="0 0 230 132" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <pattern id="g" width="9" height="9" patternUnits="userSpaceOnUse">
-            <path d="M9 0H0V9" fill="none" stroke="#E1E6ED" stroke-width="1"/>
-          </pattern>
-        </defs>
-        <!-- blok primárneho modelu -->
-        <g>
-          <rect x="2" y="20" width="66" height="92" fill="url(#g)" stroke="#0E5A8A" stroke-width="1.5"/>
-          <path d="M12 96 V70 H24 V96 M24 82 H40 V96 M40 74 H54 V96" fill="none" stroke="#0E5A8A" stroke-width="2"/>
-          <text x="35" y="14" text-anchor="middle" font-family="'IBM Plex Mono',monospace" font-size="8.5" fill="#0E5A8A">PRIMÁRNY</text>
-        </g>
-        <text x="79" y="70" text-anchor="middle" font-size="15" fill="#8A94A3">+</text>
-        <!-- blok sekundárneho modelu: jednotlivé objekty -->
-        <g>
-          <rect x="88" y="20" width="54" height="92" fill="url(#g)" stroke="#B45309" stroke-width="1.5" stroke-dasharray="4 3"/>
-          <rect x="98" y="40" width="12" height="12" fill="#FBF1E7" stroke="#B45309" stroke-width="1.8"/>
-          <circle cx="124" cy="60" r="7" fill="#FBF1E7" stroke="#B45309" stroke-width="1.8"/>
-          <rect x="104" y="76" width="14" height="10" fill="#FBF1E7" stroke="#B45309" stroke-width="1.8"/>
-          <text x="115" y="14" text-anchor="middle" font-family="'IBM Plex Mono',monospace" font-size="8.5" fill="#B45309">OBJEKTY</text>
-        </g>
-        <path d="M150 66 H166" stroke="#8A94A3" stroke-width="1.5" marker-end="url(#a)"/>
-        <defs><marker id="a" markerWidth="7" markerHeight="7" refX="5" refY="3.2" orient="auto"><path d="M0 0 L6 3.2 L0 6.4 z" fill="#8A94A3"/></marker></defs>
-        <!-- výsledný zlúčený model -->
-        <g>
-          <rect x="170" y="20" width="58" height="92" fill="url(#g)" stroke="#0F7B54" stroke-width="1.8"/>
-          <path d="M178 96 V70 H190 V96 M190 82 H206 V96" fill="none" stroke="#0F7B54" stroke-width="2"/>
-          <rect x="196" y="44" width="10" height="10" fill="#E7F4EE" stroke="#0F7B54" stroke-width="1.8"/>
-          <circle cx="214" cy="58" r="5.5" fill="#E7F4EE" stroke="#0F7B54" stroke-width="1.8"/>
-          <text x="199" y="14" text-anchor="middle" font-family="'IBM Plex Mono',monospace" font-size="8.5" fill="#0F7B54">ZLÚČENÝ</text>
-        </g>
-      </svg>
-    </div>
-  </header>
+
+  <section class="card toolhead" id="mgHead">
+    <div class="kicker kicker--sec">// koordinácia modelov</div>
+    <h1>Zlúčenie IFC modelov</h1>
+    <p class="lede">Z primárneho modelu zostane celá stavebná štruktúra. Zo sekundárneho sa pridajú <b>len vybrané objekty</b> — s geometriou, umiestnením, materiálmi a vlastnosťami — zaradené do priestorovej štruktúry primárneho modelu. Všetko prebieha lokálne vo vašom prehliadači.</p>
+  </section>
 
   <section class="inputs">
     <div class="panel panel--primary" id="panelA">
       <div class="panel__head">
-        <span class="panel__tag">Primárny</span>
-        <span class="panel__title">Základ — zostáva</span>
+        <span class="panel__tag">A · primárny</span>
+        <span class="panel__title">základ — zostáva</span>
         <span class="panel__sub" id="subA"></span>
       </div>
       <div class="panel__body" id="bodyA"></div>
@@ -145,24 +118,28 @@
 
     <div class="panel panel--secondary" id="panelB">
       <div class="panel__head">
-        <span class="panel__tag">Sekundárny</span>
-        <span class="panel__title">Zdroj objektov</span>
+        <span class="panel__tag">B · sekundárny</span>
+        <span class="panel__title">zdroj objektov</span>
         <span class="panel__sub" id="subB"></span>
       </div>
       <div class="panel__body" id="bodyB"></div>
     </div>
   </section>
 
-  <section class="settings" id="settings" hidden>
+  <!-- porovnanie schémy a jednotiek oboch modelov (zobrazí sa pri nesúlade) -->
+  <section class="card mismatch" id="mismatch" hidden></section>
+
+  <section class="card settings" id="settings" hidden>
+    <div class="card__head">nastavenia zlúčenia</div>
     <div class="settings__grid">
       <div class="field">
-        <label for="target">Kam vložiť objekty (priestorová štruktúra primárneho modelu)</label>
+        <label for="target">cieľový kontajner v primárnom modeli</label>
         <select id="target"></select>
         <div class="help">Importované objekty sa zaradia do tohto podlažia / budovy / areálu.</div>
       </div>
 
       <div class="field">
-        <span class="legend">Umiestnenie importovaných objektov</span>
+        <span class="legend">umiestnenie importovaných objektov</span>
         <div class="radios">
           <label class="radio"><input type="radio" name="pmode" value="rebase" checked>
             <span><span class="rt">Zarovnať na cieľový kontajner</span> <span class="rd">— odporúčané. Lokálna poloha objektu sa zachová, ale vztiahne sa na súradnicový systém cieľového podlažia primárneho modelu.</span></span>
@@ -174,7 +151,7 @@
       </div>
 
       <div class="field">
-        <span class="legend">Manuálny posun (voliteľné)</span>
+        <span class="legend" id="offLegend">manuálny posun (voliteľné)</span>
         <div class="offset">
           <label class="num"><span>X</span><input type="number" id="offX" value="0" step="0.1"></label>
           <label class="num"><span>Y</span><input type="number" id="offY" value="0" step="0.1"></label>
@@ -184,102 +161,76 @@
       </div>
 
       <div class="field">
-        <span class="legend">Prenášané údaje</span>
+        <span class="legend">prenášané údaje</span>
         <div class="radios">
-          <label class="radio" style="align-items:center"><input type="checkbox" id="copyProps" checked><span class="rt" style="font-weight:500">Property sety (vlastnosti)</span></label>
-          <label class="radio" style="align-items:center"><input type="checkbox" id="copyMats" checked><span class="rt" style="font-weight:500">Materiály</span></label>
+          <label class="radio radio--flat"><input type="checkbox" id="copyProps" checked><span class="rt">Property sety (vlastnosti)</span></label>
+          <label class="radio radio--flat"><input type="checkbox" id="copyMats" checked><span class="rt">Materiály</span></label>
         </div>
+        <details class="adv" id="advPrune">
+          <summary>rozšírené — odstrániť typy z primárneho modelu</summary>
+          <div class="adv__note">Voliteľné. Napr. ak má primárny model vlastný mobiliár, ktorý chcete nahradiť objektmi zo sekundárneho. Odstránia sa aj závislé väzby, ktoré by inak zostali visieť. Používajte opatrne a výstup skontrolujte.</div>
+          <div class="typegrid" id="pruneGrid"></div>
+        </details>
       </div>
     </div>
-
-    <details class="adv" id="advPrune">
-      <summary>Rozšírené — odstrániť typy z primárneho modelu</summary>
-      <div class="adv__note">Voliteľné. Napr. ak má primárny model vlastný mobiliár, ktorý chcete nahradiť objektmi zo sekundárneho. Odstránia sa aj závislé väzby, ktoré by inak zostali visieť. Používajte opatrne a výstup skontrolujte.</div>
-      <div class="typegrid" id="pruneGrid"></div>
-    </details>
   </section>
 
   <div class="action">
-    <button class="btn btn--go" id="mergeBtn" disabled>Zlúčiť modely</button>
-    <span class="mergehint" id="mergeHint">Načítajte oba modely.</span>
+    <button class="btn btn--go" id="mergeBtn" disabled>zlúčiť modely <span class="btn__arr">→</span></button>
+    <span class="mergehint" id="mergeHint">// načítajte oba modely</span>
   </div>
 
-  <section class="result" id="result" hidden></section>
+  <section class="card result" id="result" hidden></section>
 
-  <footer class="notes">
-    <div><b>Na čo myslieť.</b> Nástroj kopíruje entity na úrovni STEP/IFC textu, prečísluje ich a prelinkuje na spoločný reprezentačný kontext a owner history primárneho modelu.</div>
-    <div>Odporúča sa, aby oba modely mali <b>rovnakú IFC schému aj jednotky</b> a zdieľali počiatok súradníc — inak môžu byť objekty posunuté alebo v inej mierke (nástroj na to upozorní).</div>
-    <div>Výsledok si vždy overte vo svojom BIM prehliadači (napr. usporiadanie v strome, polohu a geometriu objektov).</div>
-  </footer>
 </div>
 
 <!-- ======================= NÁSTROJ 2 — PREHLIADAČ KÓDU ======================= -->
 <div class="sheet sheet--wide view" id="view-viewer">
-  <header class="top" id="vwHead">
-    <div class="brand">
-      <div class="eyebrow">IFC · Zdrojový kód</div>
-      <h1>Prehliadač IFC kódu</h1>
-      <p class="lede">Nahrajte IFC súbor a zobrazí sa jeho zdrojový kód (STEP / ISO-10303-21) s farebným zvýraznením — <b>triedy podľa kategórie</b> a všetky hodnoty v riadku (texty, čísla, GUID, výčty, odkazy). Kliknutím na riadok sa vpravo rozpíšu jeho <b>atribúty podľa IFC schémy</b>, property sety a väzby. Súbor zostáva vo vašom počítači.</p>
-    </div>
-    <div class="schematic schematic--sm" aria-hidden="true">
-      <svg viewBox="0 0 180 110" xmlns="http://www.w3.org/2000/svg">
-        <rect x="1" y="6" width="178" height="98" fill="#fff" stroke="#CBD3DE" stroke-width="1.5"/>
-        <path d="M1 20 H179" stroke="#CBD3DE" stroke-width="1.2"/>
-        <path d="M22 6 V104" stroke="#E1E6ED" stroke-width="1.2"/>
-        <circle cx="10" cy="13" r="2.4" fill="#E1E6ED"/><circle cx="19" cy="13" r="2.4" fill="#E1E6ED"/>
-        <g stroke-width="3" stroke-linecap="round">
-          <path d="M30 31 H44" stroke="#5B6472"/><path d="M48 31 H82" stroke="#157F4C"/><path d="M86 31 H108" stroke="#7A5AF8"/><path d="M112 31 H140" stroke="#9A6700"/>
-          <path d="M30 45 H44" stroke="#5B6472"/><path d="M48 45 H76" stroke="#0E5A8A"/><path d="M80 45 H96" stroke="#1D4ED8"/><path d="M100 45 H126" stroke="#0B7285"/>
-          <path d="M30 59 H44" stroke="#5B6472"/><path d="M48 59 H86" stroke="#7C3AED"/><path d="M90 59 H112" stroke="#1D4ED8"/><path d="M116 59 H134" stroke="#1D4ED8"/>
-          <path d="M30 73 H44" stroke="#5B6472"/><path d="M48 73 H80" stroke="#B45309"/><path d="M84 73 H118" stroke="#9A6700"/><path d="M122 73 H136" stroke="#B02A37"/>
-          <path d="M30 87 H44" stroke="#5B6472"/><path d="M48 87 H74" stroke="#0E7490"/><path d="M78 87 H104" stroke="#0B7285"/><path d="M108 87 H150" stroke="#0B7285"/>
-        </g>
-      </svg>
-    </div>
-  </header>
+
+  <section class="card toolhead" id="vwHead">
+    <div class="kicker kicker--sec">// step / iso-10303-21</div>
+    <h1>Prehliadač IFC kódu</h1>
+    <p class="lede">Zdrojový kód s farebným zvýraznením — <b>triedy podľa kategórie</b> a všetky hodnoty v zápise. Kliknutím na entitu sa vpravo rozpíšu <b>atribúty podľa schémy súboru</b>, property sety a väzby. Texty, čísla a výčtové hodnoty sa dajú upraviť a stiahnuť ako kópiu. Súbor zostáva vo vašom počítači.</p>
+  </section>
 
   <!-- nahranie súboru -->
-  <section class="panel" id="vwPanel">
+  <section class="panel panel--secondary" id="vwPanel">
     <div class="panel__head">
-      <span class="panel__tag panel__tag--view">Súbor</span>
-      <span class="panel__title" id="vwTitle">Nahrajte IFC súbor</span>
-      <span class="panel__sub" id="vwSub"></span>
+      <span class="panel__tag">súbor</span>
+      <span class="panel__title" id="vwTitle">nahrajte IFC alebo STEP</span>
+      <span class="panel__sub" id="vwSub">.ifc · .step · .stp</span>
     </div>
     <div class="panel__body" id="vwBody"></div>
   </section>
 
   <!-- samotný prehliadač -->
   <section class="vw" id="vwApp" hidden>
-    <div class="vw__bar">
-      <span class="vw__file" id="vwFile"></span>
-      <span class="chiprow" id="vwChips"></span>
-      <button class="btn btn--ghost btn--sm" id="vwSave" hidden>Stiahnuť upravený súbor</button>
-    </div>
+    <div class="metastrip" id="vwChips"></div>
 
     <div class="vw__tools">
       <div class="vw__search">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
-        <input id="vwQ" type="search" placeholder="Hľadať text, triedu alebo #ID…" autocomplete="off" spellcheck="false">
+        <input id="vwQ" type="search" placeholder="hľadať text, triedu alebo #ID…" autocomplete="off" spellcheck="false">
         <span class="vw__hits" id="vwHits"></span>
         <button class="iconbtn" id="vwPrev" title="Predchádzajúca zhoda (Shift+Enter)">‹</button>
         <button class="iconbtn" id="vwNext" title="Nasledujúca zhoda (Enter)">›</button>
       </div>
 
       <details class="pop" id="vwFilter">
-        <summary>Filter tried <span id="vwFilterN"></span></summary>
+        <summary>filter tried <span id="vwFilterN"></span></summary>
         <div class="pop__body">
           <div class="pop__head">
-            <input id="vwTypeQ" type="search" placeholder="Nájsť triedu…" autocomplete="off" spellcheck="false">
+            <input id="vwTypeQ" type="search" placeholder="nájsť triedu…" autocomplete="off" spellcheck="false">
             <button class="linkbtn" id="vwTypeNone">zrušiť filter</button>
           </div>
           <div class="pop__count" id="vwTypeCount"></div>
           <div class="pop__list" id="vwTypeList"></div>
-          <div class="pop__note">Bez výberu sa zobrazuje celý súbor. Výberom tried sa kód zúži len na ich riadky. <b>Enter</b> zapne prvú ponúknutú triedu.</div>
+          <div class="pop__note">Bez výberu sa zobrazuje celý súbor. Výberom tried sa kód zúži len na ich entity. <b>Enter</b> zapne prvú ponúknutú triedu.</div>
         </div>
       </details>
 
       <details class="pop" id="vwLegend">
-        <summary>Legenda</summary>
+        <summary>legenda</summary>
         <div class="pop__body">
           <div class="pop__sub">Triedy podľa kategórie</div>
           <div class="lg">
@@ -294,7 +245,7 @@
             <span class="lg__i kc-value">IFCLENGTHMEASURE</span><span class="lg__d">hodnota s dátovým typom</span>
             <span class="lg__i kc-other">IFCTASK</span><span class="lg__d">ostatné</span>
           </div>
-          <div class="pop__sub">Hodnoty v riadku</div>
+          <div class="pop__sub">Hodnoty v zápise entity</div>
           <div class="lg">
             <span class="lg__i t-id">#127</span><span class="lg__d">číslo entity (jej vlastné ID)</span>
             <span class="lg__i t-ref">#42</span><span class="lg__d">odkaz na inú entitu — kliknuteľný</span>
@@ -308,7 +259,7 @@
         </div>
       </details>
 
-      <button class="toolbtn" id="vwEdited" disabled title="Zatiaľ ste nič neupravili">Upravené <span id="vwEditedN"></span></button>
+      <button class="toolbtn" id="vwEdited" disabled title="Zatiaľ ste nič neupravili">upravené <span id="vwEditedN"></span></button>
 
       <span class="vw__visible" id="vwVisible"></span>
     </div>
@@ -316,23 +267,19 @@
     <div class="vw__main">
       <div class="vw__code" id="vwCode" tabindex="0">
         <div class="vw__canvas" id="vwCanvas"><div class="vw__rows" id="vwRows"></div></div>
+        <div class="vw__empty" id="vwEmpty" hidden></div>
       </div>
       <aside class="vw__side" id="vwSide"></aside>
     </div>
   </section>
 
-  <footer class="notes">
-    <div><b>Ako čítať IFC.</b> Každý riadok v sekcii <code>DATA</code> je jedna entita v tvare <code>#ID = TRIEDA(argumenty);</code>. Argumenty sú buď hodnoty (text, číslo, výčet), odkazy na iné entity (<code>#123</code>), zoznamy v zátvorkách, alebo <code>$</code> pre nezadanú hodnotu.</div>
-    <div><b>Názvy atribútov</b> sú prevzaté priamo zo schémy tej verzie IFC, ktorú súbor uvádza v hlavičke — vrátane atribútov zdedených od nadradených tried, v poradí ako v STEP zápise. Ak trieda v schéme súboru nie je (alebo počet argumentov nesedí), použijú sa názvy z najbližšej verzie a pri nadpise <i>Atribúty</i> sa objaví štítok, z ktorej verzie sú.</div>
-    <div><b>Úprava hodnôt.</b> Ceruzka <b>✎</b> pri atribúte otvorí pole na úpravu — upravovať sa dajú <b>texty, čísla a výčtové hodnoty</b> (aj zabalené v dátovom type, napr. <code>IFCLABEL('W-01')</code>). Výčtové hodnoty sa vyberajú <b>zo zoznamu povolených hodnôt</b> danej triedy podľa verzie schémy súboru; rovnako sa dá <b>doplniť nezadaná hodnota</b> (<code>$</code>) všade, kde schéma pozná typ atribútu — a voliteľné atribúty sa dajú vyprázdniť naspäť na <code>$</code>. Upraviť sa dajú aj <b>zoznamy jednoduchých hodnôt</b> (napr. <code>OPTIONAL LIST [1:?] OF IfcLabel</code>) — každá položka na samostatný riadok, uloží sa cez <b>Ctrl+Enter</b>; pod poľom je popis zápisu aj živý náhľad výsledku, napr. <code>('Karol','Peter')</code>. Nemenné zostávajú odkazy na iné entity (<code>#123</code>), odvodené hodnoty (<code>*</code>), zoznamy odkazov a zložených hodnôt, číslo entity a jej <code>GlobalId</code>. Diakritika sa zapíše kódovaním podľa ISO 10303-21, reálne čísla si zachovajú desatinnú bodku. Zmenené riadky sú vyznačené, každú zmenu možno vrátiť a tlačidlom <b>Stiahnuť upravený súbor</b> si uložíte upravenú kópiu — pôvodný súbor sa nemení.</div>
-    <div><b>Dokumentácia.</b> Názov triedy v paneli vpravo je odkaz do oficiálnej dokumentácie buildingSMART pre <b>verziu schémy z nahraného súboru</b> (IFC2x3 TC1, IFC4 ADD2 TC1 alebo IFC4.3) — otvorí sa v novej záložke. Ak daná trieda v schéme súboru nie je (napr. novšia trieda v staršom modeli), odkaz vedie do najbližšej verzie a štítok pri ňom na to upozorní.</div>
-  </footer>
 </div>
 
 <footer class="sitefoot">
-  <span class="sitefoot__brand">Mini IFC tools</span>
+  <span class="sitefoot__brand">mini-ifc/tools</span>
   <span class="sitefoot__sep">·</span>
   <a href="https://github.com/tomecjak" target="_blank" rel="noopener noreferrer">VibeCode by Jakub</a>
+  <span class="sitefoot__end">files never leave your machine</span>
 </footer>
 
 <!-- skryté vstupy na výber súborov -->
