@@ -13,22 +13,24 @@
 
 <!-- ======================= HORNÁ LIŠTA ======================= -->
 <header class="bar" id="appbar">
-  <a class="bar__logo" href="#/" title="Späť na výber nástrojov">
-    <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
-      <path d="M20 6 H6 V58 H20" fill="none" stroke="currentColor" stroke-width="7"/>
-      <path d="M44 6 H58 V58 H44" fill="none" stroke="currentColor" stroke-width="7"/>
-      <rect x="26" y="18" width="12" height="12" fill="#176B54"/>
-      <rect x="26" y="34" width="12" height="12" fill="#B65418"/>
-    </svg>
-    <span>mini-ifc<span class="bar__slash">/</span>tools</span>
-  </a>
-  <span class="bar__pipe">|</span>
-  <span class="bar__tool" id="barTool"></span>
-  <span class="bar__sub" id="barSub"></span>
-  <span class="bar__badge" id="barBadge" hidden></span>
-  <span class="bar__gap"></span>
-  <button class="bar__btn bar__btn--go" id="vwSave" hidden>stiahnuť upravený ↓</button>
-  <button class="bar__btn" id="barReset" hidden></button>
+  <div class="bar__inner">
+    <a class="bar__logo" href="#/" title="Späť na výber nástrojov">
+      <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
+        <path d="M20 6 H6 V58 H20" fill="none" stroke="currentColor" stroke-width="7"/>
+        <path d="M44 6 H58 V58 H44" fill="none" stroke="currentColor" stroke-width="7"/>
+        <rect x="26" y="18" width="12" height="12" fill="#176B54"/>
+        <rect x="26" y="34" width="12" height="12" fill="#B65418"/>
+      </svg>
+      <span>mini-ifc<span class="bar__slash">/</span>tools</span>
+    </a>
+    <span class="bar__pipe">|</span>
+    <span class="bar__tool" id="barTool"></span>
+    <span class="bar__sub" id="barSub"></span>
+    <span class="bar__badge" id="barBadge" hidden></span>
+    <span class="bar__gap"></span>
+    <button class="bar__btn bar__btn--go" id="vwSave" hidden>stiahnuť upravený ↓</button>
+    <button class="bar__btn" id="barReset" hidden></button>
+  </div>
 </header>
 
 <!-- ======================= ROZCESTNÍK ======================= -->
@@ -185,7 +187,7 @@
 </div>
 
 <!-- ======================= NÁSTROJ 2 — PREHLIADAČ KÓDU ======================= -->
-<div class="sheet sheet--wide view" id="view-viewer">
+<div class="sheet view" id="view-viewer">
 
   <section class="card toolhead" id="vwHead">
     <div class="kicker kicker--sec">// step / iso-10303-21</div>
@@ -276,10 +278,12 @@
 </div>
 
 <footer class="sitefoot">
-  <span class="sitefoot__brand">mini-ifc/tools</span>
-  <span class="sitefoot__sep">·</span>
-  <a href="https://github.com/tomecjak" target="_blank" rel="noopener noreferrer">VibeCode by Jakub</a>
-  <span class="sitefoot__end">files never leave your machine</span>
+  <div class="sitefoot__inner">
+    <span class="sitefoot__brand">mini-ifc/tools</span>
+    <span class="sitefoot__sep">·</span>
+    <a href="https://github.com/tomecjak" target="_blank" rel="noopener noreferrer">VibeCode by Jakub</a>
+    <span class="sitefoot__end">files never leave your machine</span>
+  </div>
 </footer>
 
 <!-- skryté vstupy na výber súborov -->
