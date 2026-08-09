@@ -40,7 +40,7 @@
     <div class="card hero__main">
       <div class="kicker kicker--sec">// lokálne nástroje</div>
       <h1>Upravuj IFC súbory<br>priamo v prehliadači.</h1>
-      <p class="lede">Nástroje pracujú s textovou podobou IFC (STEP / ISO-10303-21). Súbory sa  nikam neukladajú — prehľadávanie, editácia aj zlučovanie beží len vo vašom prehliadači.</p>
+      <p class="lede">Nástroje pracujú s textovou podobou IFC (STEP / ISO-10303-21). Súbory sa  nikam neukladajú — prehľadávanie, editácia, zlučovanie aj kontrola bežia len vo vašom prehliadači.</p>
       <div class="facts">
         <div class="fact"><div class="fact__k">Schémy</div><div class="fact__v">2x3 · 4 · 4.3</div></div>
         <div class="fact"><div class="fact__k">Limit</div><div class="fact__v">~200 MB</div></div>
@@ -94,6 +94,23 @@
         </ul>
       </div>
       <span class="tool__go">otvoriť code <span class="tool__arr">→</span></span>
+    </a>
+
+    <a class="tool tool--check" href="#/validate">
+      <div class="tool__b">
+        <div class="tool__h">
+          <span class="tool__no">[03]</span>
+          <span class="tool__name">validate</span>
+          <span class="tool__sub">kontrola súboru</span>
+        </div>
+        <p>Rýchla kontrola zápisu a väzieb hneď po nahratí. Na vyžiadanie aj hĺbková kontrola podľa schémy EXPRESS jadrom IfcOpenShell — tým istým, ktoré poháňa validačnú službu buildingSMART.</p>
+        <ul class="tool__list">
+          <li>štruktúra, čísla entít, GlobalId</li>
+          <li>visiace odkazy a nepoužité entity</li>
+          <li>typy atribútov a pravidlá WHERE</li>
+        </ul>
+      </div>
+      <span class="tool__go">otvoriť validate <span class="tool__arr">→</span></span>
     </a>
   </section>
 
@@ -277,6 +294,34 @@
 
 </div>
 
+<!-- ======================= NÁSTROJ 3 — VALIDÁCIA ======================= -->
+<div class="sheet view" id="view-validate">
+
+  <section class="card toolhead" id="vlHead">
+    <div class="kicker kicker--chk">// kontrola kvality</div>
+    <h1>Validácia IFC súboru</h1>
+    <p class="lede">Dve úrovne kontroly. <b>Rýchla</b> prebehne hneď po nahratí — štruktúra súboru, verzia schémy, zápis entít, duplicitné čísla a GlobalId, visiace odkazy. <b>Hĺbková</b> sa spúšťa tlačidlom a použije jadro <b>ifcopenshell.validate</b>, teda tú istú knižnicu, na ktorej stojí validačná služba buildingSMART: dátové typy atribútov, kardinality, výčty a pravidlá WHERE zo schémy EXPRESS. Súbor sa nikam neodosiela.</p>
+  </section>
+
+  <!-- nahranie súboru -->
+  <section class="panel panel--check" id="vlPanel">
+    <div class="panel__head">
+      <span class="panel__tag">súbor</span>
+      <span class="panel__title" id="vlTitle">nahrajte IFC alebo STEP</span>
+      <span class="panel__sub" id="vlSub">.ifc · .step · .stp</span>
+    </div>
+    <div class="panel__body" id="vlBody"></div>
+  </section>
+
+  <!-- výsledky -->
+  <section class="vl" id="vlApp" hidden>
+    <div class="metastrip" id="vlChips"></div>
+    <section class="card result" id="vlSummary"></section>
+    <section class="card deep" id="vlDeep"></section>
+  </section>
+
+</div>
+
 <footer class="sitefoot">
   <div class="sitefoot__inner">
     <span class="sitefoot__brand">mini-ifc/tools</span>
@@ -290,6 +335,7 @@
 <input type="file" id="fileA" accept=".ifc,.IFC" hidden>
 <input type="file" id="fileB" accept=".ifc,.IFC" hidden>
 <input type="file" id="fileV" accept=".ifc,.IFC,.step,.stp" hidden>
+<input type="file" id="fileC" accept=".ifc,.IFC,.step,.stp" hidden>
 
 <!-- jadro zlúčenia — načítané aj tu, aby fungoval núdzový režim bez Web Workera -->
 <script src="js/ifc-merge.js"></script>
@@ -300,6 +346,8 @@
 <!-- rozhrania jednotlivých nástrojov -->
 <script src="js/app.js"></script>
 <script src="js/viewer.js"></script>
+<!-- validácia — hĺbková časť sa dotiahne až na kliknutie (js/validate-pyodide.js) -->
+<script src="js/validate.js"></script>
 <!-- prepínanie nástrojov -->
 <script src="js/nav.js"></script>
 </body>

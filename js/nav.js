@@ -14,7 +14,9 @@
     "merge":  { el: "view-merge",  slug: "merge", cls: "is-merge", title: "Zlúčenie IFC modelov",
                 sub: "zlúčenie modelov", tool: "MergeTool",  reset: "nahrať nové modely" },
     "viewer": { el: "view-viewer", slug: "code",  cls: "is-code",  title: "Prehliadač IFC kódu",
-                sub: "prehliadač zdrojového kódu", tool: "ViewerTool", reset: "nahrať nový súbor" }
+                sub: "prehliadač zdrojového kódu", tool: "ViewerTool", reset: "nahrať nový súbor" },
+    "validate": { el: "view-validate", slug: "validate", cls: "is-check", title: "Validácia IFC súboru",
+                sub: "kontrola súboru", tool: "ValidateTool", reset: "nahrať iný súbor" }
   };
 
   var elTool  = document.getElementById("barTool");

@@ -741,6 +741,7 @@
     categoryLabel: categoryLabel,
     splitArgs: splitArgs,
     splitTopLevel: splitTopLevel,
+    maskStrings: maskStrings,
     refsIn: refsIn,
     decodeIfcText: decodeIfcText,
     encodeIfcText: encodeIfcText,

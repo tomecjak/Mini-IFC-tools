@@ -27,6 +27,11 @@
   --secondary-line:#E9CDB2;
   --secondary-soft:#F0B98A;
 
+  --check:#2F5D7C;        /* kontrola / validácia */
+  --check-tint:#EDF3F7;
+  --check-line:#C3D6E3;
+  --check-soft:#9CC6DE;
+
   --warn:#8A5A00;
   --warn-tint:#FBF6E9;
   --warn-line:#E3CFA6;
@@ -84,6 +89,7 @@ body{
 .bar__tool{font-weight:600}
 .bar__tool.is-merge{color:var(--primary)}
 .bar__tool.is-code{color:var(--secondary)}
+.bar__tool.is-check{color:var(--check)}
 .bar__sub{color:var(--faint);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* prázdna rozpera — drží tlačidlá pri pravom okraji nezávisle od toho,
    či je stavový text a štítok práve zobrazený (na mobile sú skryté) */
@@ -120,6 +126,7 @@ body{
   color:var(--faint);margin-bottom:10px;
 }
 .kicker--sec{color:var(--secondary)}
+.kicker--chk{color:var(--check)}
 h1{
   font-family:var(--mono);font-size:30px;line-height:1.15;margin:0 0 12px;
   font-weight:600;letter-spacing:-.03em;
@@ -151,7 +158,7 @@ h1{
 .sample__k{color:var(--muted)}
 
 /* ---------- rozcestník ---------- */
-.tools{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px}
 .tool{
   display:flex;flex-direction:column;text-decoration:none;color:inherit;
   background:var(--surface);border:1px solid var(--line-strong);
@@ -160,13 +167,16 @@ h1{
 .tool__b{padding:22px 24px;display:flex;flex-direction:column;gap:11px;flex:1}
 .tool--merge{border-left:4px solid var(--primary)}
 .tool--view{border-left:4px solid var(--secondary)}
+.tool--check{border-left:4px solid var(--check)}
 .tool:hover{box-shadow:0 10px 26px -22px rgba(26,26,23,.7);border-color:var(--faint)}
 .tool--merge:hover{border-left-color:var(--primary)}
 .tool--view:hover{border-left-color:var(--secondary)}
+.tool--check:hover{border-left-color:var(--check)}
 .tool__h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;font-family:var(--mono)}
 .tool__no{font-size:11px;font-weight:600}
 .tool--merge .tool__no{color:var(--primary)}
 .tool--view .tool__no{color:var(--secondary)}
+.tool--check .tool__no{color:var(--check)}
 .tool__name{font-size:17px;font-weight:600;letter-spacing:-.02em}
 .tool__sub{font-size:11px;color:var(--faint)}
 .tool p{margin:0;color:var(--muted);font-size:13px;line-height:1.55}
@@ -187,6 +197,7 @@ h1{
 .tool__arr{margin-left:auto}
 .tool--merge .tool__arr{color:var(--primary-soft)}
 .tool--view .tool__arr{color:var(--secondary-soft)}
+.tool--check .tool__arr{color:var(--check-soft)}
 
 /* ---------- panely so súbormi ---------- */
 .inputs{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
@@ -196,6 +207,7 @@ h1{
 }
 .panel--primary{border-left:4px solid var(--primary)}
 .panel--secondary{border-left:4px solid var(--secondary)}
+.panel--check{border-left:4px solid var(--check)}
 .panel.is-error{border-left-color:var(--danger)}
 .panel__head{
   display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:11px 16px;
@@ -423,6 +435,61 @@ details.adv[open] > summary::before{content:"–"}
 .note--mobile{display:none}
 .note code{font-family:var(--mono);font-size:11.5px;background:var(--surface);
   border:1px solid currentColor;padding:0 4px}
+
+/* =========================================================================
+   VALIDÁCIA IFC SÚBORU
+   ========================================================================= */
+.vl{display:flex;flex-direction:column;gap:18px}
+.badge--warn{background:var(--warn-tint);color:var(--warn);border-color:var(--warn-line)}
+.panel--check .pbar i,.pbar--chk i{background:var(--check)}
+
+/* zoznam kontrol — jeden riadok = jedna kontrola so stavovou značkou */
+.chks{display:flex;flex-direction:column;border:1px solid var(--line)}
+.chk{display:flex;gap:11px;padding:12px 13px;border-bottom:1px solid var(--line)}
+.chk:last-child{border-bottom:none}
+.chk__i{
+  font-family:var(--mono);font-size:12px;font-weight:600;line-height:18px;
+  width:18px;height:18px;text-align:center;flex:none;
+  border:1px solid currentColor;background:var(--surface);
+}
+.chk.is-ok .chk__i{color:var(--primary);background:var(--primary-tint)}
+.chk.is-bad .chk__i{color:var(--danger);background:var(--danger-tint)}
+.chk.is-warn .chk__i{color:var(--warn);background:var(--warn-tint)}
+.chk.is-info .chk__i{color:var(--check);background:var(--check-tint)}
+.chk__b{min-width:0;flex:1}
+.chk__t{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;font-size:13.5px;font-weight:600}
+.chk__n{font-family:var(--mono);font-size:11px;font-weight:400;color:var(--faint)}
+.chk.is-bad .chk__n{color:var(--danger)}
+.chk.is-warn .chk__n{color:var(--warn)}
+.chk__d{font-size:12.5px;color:var(--muted);line-height:1.5;margin-top:2px}
+.chk__more{margin-top:8px}
+.chk__more > summary{
+  cursor:pointer;font-family:var(--mono);font-size:11px;color:var(--check);
+  list-style:none;display:flex;align-items:center;gap:7px;
+}
+.chk__more > summary::-webkit-details-marker{display:none}
+.chk__more > summary::before{content:"+";font-weight:600}
+.chk__more[open] > summary::before{content:"–"}
+
+/* nálezy jednej kontroly */
+.fnd{
+  margin:8px 0 0;padding:0;list-style:none;max-height:280px;overflow:auto;
+  border:1px solid var(--line);background:var(--canvas);
+}
+.fnd li{
+  display:flex;gap:10px;padding:5px 9px;border-bottom:1px dotted var(--line);
+  font-family:var(--mono);font-size:11.5px;line-height:1.45;overflow-wrap:anywhere;
+}
+.fnd li:last-child{border-bottom:none}
+.fnd__l{color:var(--faint);flex:none;white-space:nowrap}
+.fnd__rest{font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:6px}
+
+/* hĺbková kontrola */
+.deep__body{padding:16px;display:flex;flex-direction:column;gap:12px}
+.deep__body .help{margin:0}
+.deep__run{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.deep__msg{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+.deep__run .btn{margin-left:auto}
 
 /* =========================================================================
    PREHLIADAČ IFC KÓDU
