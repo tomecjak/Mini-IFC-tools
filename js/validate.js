@@ -31,9 +31,12 @@
   var st = {
     file: null, name: "", size: 0,
     idx: null, checks: null, stats: null,
-    deep: null,                 // výsledok hĺbkovej kontroly
-    deepState: "idle",          // idle | running | done | error
-    deepMsg: "", deepMs: 0, timer: null, t0: 0
+    deep: null, deepState: "idle", deepMs: 0,     // kontrola podľa schémy
+    rules: null, rulesState: "idle", rulesMs: 0,  // normatívne pravidlá
+    rulesInfo: null,                              // súhrn behu pravidiel
+    // stavy: idle | running | done | error. Obe kontroly zdieľajú jedno vlákno,
+    // takže naraz beží vždy len jedna — busy hovorí ktorá.
+    busy: null, msg: "", prog: null, err: {}, timer: null, t0: 0
   };
 
   // =========================================================================
@@ -54,9 +57,9 @@
       return worker;
     }
     return {
-      run: function (buf, onMsg) {
+      run: function (kind, buf, onMsg) {
         handler = onMsg;
-        try { boot().postMessage({ type: "validate", buf: buf }, [buf]); }
+        try { boot().postMessage({ type: kind, buf: buf }, [buf]); }
         catch (e) { onMsg({ type: "error", message: e.message }); }
       },
       stop: function () {
@@ -118,9 +121,8 @@
   }
 
   function handleFile(file) {
-    engine.stop();
+    resetJobs();
     st.file = file; st.name = file.name; st.size = file.size;
-    st.deep = null; st.deepState = "idle"; st.deepMsg = ""; st.deepMs = 0;
     progress("číta sa súbor…", null);
     var reader = new FileReader();
     reader.onload = function () {
@@ -454,6 +456,7 @@
 
     renderSummary();
     renderDeep();
+    renderRules();
   }
 
   function renderSummary() {
@@ -482,63 +485,17 @@
       "</div>";
   }
 
-  // ---- hĺbková kontrola ----------------------------------------------------
-  function renderDeep() {
-    var box = $("vlDeep");
-    var mb = st.size / (1024 * 1024);
-    var head = '<div class="card__head">hĺbková kontrola podľa schémy</div>';
+  // ---- spoločná obsluha oboch hĺbkových kontrol -----------------------------
+  // Obe bežia v tom istom vlákne (Python sa nedá spustiť dvakrát naraz), takže
+  // kým jedna beží, druhá má tlačidlo vypnuté.
+  function renderJobs() { renderDeep(); renderRules(); }
 
-    if (st.deepState === "running") {
-      box.innerHTML = head +
-        '<div class="deep__body">' +
-          '<div class="deep__run"><div class="spinner"></div>' +
-            '<div><div class="deep__msg">' + esc(st.deepMsg || "pripravujem…") + "</div>" +
-            '<div class="help" id="vlElapsed">beží 0 s</div></div>' +
-            '<button class="btn btn--sm btn--ghost" id="vlStop">zrušiť</button>' +
-          "</div>" +
-        "</div>";
-      $("vlStop").addEventListener("click", stopDeep);
-      return;
-    }
-
-    if (st.deepState === "done" && st.deep) {
-      var checks = st.deep;
-      var level = worst(checks);
-      var badge = level === "ok" ? '<span class="badge badge--ok">bez chýb</span>'
-                : '<span class="badge badge--bad">nájdené chyby</span>';
-      box.innerHTML =
-        '<div class="result__head"><h2>hĺbková kontrola podľa schémy</h2>' + badge +
-          '<span class="result__size">' + (st.deepMs / 1000).toFixed(1) + " s</span></div>" +
-        '<div class="result__body">' +
-          '<div class="chks">' + checks.map(checkHTML).join("") + "</div>" +
-          '<div class="dlrow">' +
-            '<button class="btn btn--sm btn--ghost" id="vlAgain">spustiť znova</button>' +
-            '<span class="mergehint">jadro ifcopenshell.validate — rovnaké ako v službe buildingSMART</span>' +
-          "</div>" +
-        "</div>";
-      $("vlAgain").addEventListener("click", startDeep);
-      return;
-    }
-
-    box.innerHTML = head +
-      '<div class="deep__body">' +
-        "<p class=\"help\">Spustí <b>ifcopenshell.validate</b> — to isté jadro, ktoré používa " +
-        "validačná služba buildingSMART. Overí dátové typy atribútov, kardinality, " +
-        "výčtové hodnoty, SELECT typy a pravidlá WHERE zo schémy EXPRESS.</p>" +
-        (st.deepState === "error"
-          ? '<div class="note note--bad"><span class="note__i">✕</span><span>' + esc(st.deepMsg) + "</span></div>"
-          : "") +
-        (mb > BIG_MB
-          ? '<div class="note note--warn"><span class="note__i">!</span><span>Súbor má ' +
-            Math.round(mb) + " MB. Hĺbková kontrola drží celý model v pamäti prehliadača — " +
-            "pri takejto veľkosti môže trvať minúty alebo zlyhať na nedostatok pamäte.</span></div>"
-          : "") +
-        '<div class="dlrow">' +
-          '<button class="btn btn--sm" id="vlRun">spustiť hĺbkovú kontrolu <span class="btn__arr">→</span></button>' +
-          '<span class="mergehint">prvé spustenie stiahne ~25 MB knižnice · súbor zostáva vo vašom počítači</span>' +
-        "</div>" +
-      "</div>";
-    $("vlRun").addEventListener("click", startDeep);
+  function resetJobs() {
+    clearInterval(st.timer);
+    engine.stop();
+    st.deep = null; st.deepState = "idle"; st.deepMs = 0;
+    st.rules = null; st.rulesState = "idle"; st.rulesMs = 0; st.rulesInfo = null;
+    st.busy = null; st.msg = ""; st.prog = null; st.err = {};
   }
 
   function tick() {
@@ -546,49 +503,201 @@
     if (el) el.textContent = "beží " + Math.round((Date.now() - st.t0) / 1000) + " s";
   }
 
-  function startDeep() {
-    if (!st.file) return;
-    st.deepState = "running"; st.deepMsg = "čítam súbor…"; st.deep = null;
+  // Priebeh: pri kontrole podľa schémy vieme ukázať len text, pri pravidlách aj
+  // koľký z 104 predpisov práve beží.
+  function busyHTML(stopId) {
+    var pct = st.prog && st.prog.total ? Math.round(st.prog.done / st.prog.total * 100) : null;
+    return '<div class="deep__body">' +
+             '<div class="deep__run"><div class="spinner"></div>' +
+               '<div class="deep__st"><div class="deep__msg">' + esc(st.msg || "pripravujem…") + "</div>" +
+                 '<div class="help" id="vlElapsed">beží 0 s</div>' +
+                 (pct == null ? "" :
+                   '<div class="pbar pbar--chk"><i style="width:' + pct + '%"></i></div>' +
+                   '<div class="help">' + st.prog.done + " / " + st.prog.total + " pravidiel</div>") +
+               "</div>" +
+               '<button class="btn btn--sm btn--ghost" id="' + stopId + '">zrušiť</button>' +
+             "</div>" +
+           "</div>";
+  }
+
+  function startJob(kind) {
+    if (!st.file || st.busy) return;
+    st.busy = kind; st.msg = "čítam súbor…"; st.prog = null;
+    st.err[kind] = "";
+    if (kind === "validate") { st.deepState = "running"; st.deep = null; }
+    else { st.rulesState = "running"; st.rules = null; st.rulesInfo = null; }
     st.t0 = Date.now();
-    renderDeep();
+    renderJobs();
     clearInterval(st.timer);
     st.timer = setInterval(tick, 1000);
 
     var reader = new FileReader();
-    reader.onload = function () {
-      engine.run(reader.result, function (msg) {
-        if (msg.type === "progress") {
-          st.deepMsg = msg.text;
-          var el = document.querySelector(".deep__msg");
-          if (el) el.textContent = msg.text; else renderDeep();
-        } else if (msg.type === "result") {
-          clearInterval(st.timer);
-          st.deepMs = msg.ms;
-          st.deep = deepChecks(msg.statements);
-          st.deepState = "done";
-          renderDeep();
-        } else if (msg.type === "error") {
-          clearInterval(st.timer);
-          if (msg.detail) console.error(msg.detail);
-          st.deepState = "error";
-          st.deepMsg = "Hĺbková kontrola zlyhala: " + msg.message;
-          renderDeep();
-        }
-      });
-    };
-    reader.onerror = function () {
-      clearInterval(st.timer);
-      st.deepState = "error"; st.deepMsg = "Súbor sa nepodarilo prečítať.";
-      renderDeep();
-    };
+    reader.onload = function () { engine.run(kind, reader.result, onMessage); };
+    reader.onerror = function () { failJob(kind, "Súbor sa nepodarilo prečítať."); };
     reader.readAsArrayBuffer(st.file);
   }
 
-  function stopDeep() {
+  function onMessage(msg) {
+    var kind = st.busy;
+    if (msg.type === "progress") {
+      st.msg = msg.text;
+      if (msg.total) st.prog = { done: msg.done || 0, total: msg.total };
+      var el = document.querySelector(".deep__msg");
+      if (el && !msg.total) el.textContent = msg.text;
+      else renderJobs();
+      return;
+    }
     clearInterval(st.timer);
-    engine.stop();
-    st.deepState = "idle"; st.deepMsg = "";
-    renderDeep();
+    st.busy = null;
+    if (msg.type === "result") {
+      st.deepMs = msg.ms;
+      st.deep = deepChecks(msg.statements);
+      st.deepState = "done";
+    } else if (msg.type === "rulesResult") {
+      st.rulesMs = msg.ms;
+      st.rules = ruleChecks(msg.data);
+      st.rulesInfo = msg.data;
+      st.rulesState = "done";
+    } else if (msg.type === "error") {
+      if (msg.detail) console.error(msg.detail);
+      failJob(kind, msg.message);
+      return;
+    }
+    renderJobs();
+  }
+
+  function failJob(kind, message) {
+    clearInterval(st.timer);
+    st.busy = null;
+    st.err[kind] = message;
+    if (kind === "validate") st.deepState = "error"; else st.rulesState = "error";
+    renderJobs();
+  }
+
+  function stopJob() {
+    clearInterval(st.timer);
+    engine.stop();       // vlákno sa ukončí, knižnice sa pri ďalšom behu načítajú znova
+    if (st.busy === "validate") st.deepState = "idle"; else st.rulesState = "idle";
+    st.busy = null; st.msg = ""; st.prog = null;
+    renderJobs();
+  }
+
+  function errNote(kind) {
+    return st.err[kind] ? '<div class="note note--bad"><span class="note__i">✕</span><span>' +
+                          esc(st.err[kind]) + "</span></div>" : "";
+  }
+
+  function sizeNote(minutes) {
+    var mb = st.size / (1024 * 1024);
+    if (mb <= BIG_MB) return "";
+    return '<div class="note note--warn"><span class="note__i">!</span><span>Súbor má ' +
+           Math.round(mb) + " MB. Kontrola drží celý model v pamäti prehliadača — " +
+           (minutes ? "pri takejto veľkosti počítajte s desiatkami minút a " : "pri takejto veľkosti ") +
+           "môže zlyhať na nedostatok pamäte.</span></div>";
+  }
+
+  // ---- kontrola podľa schémy -----------------------------------------------
+  function renderDeep() {
+    var box = $("vlDeep");
+
+    if (st.busy === "validate") {
+      box.innerHTML = '<div class="card__head">hĺbková kontrola podľa schémy</div>' + busyHTML("vlStop");
+      $("vlStop").addEventListener("click", stopJob);
+      return;
+    }
+
+    if (st.deepState === "done" && st.deep) {
+      var level = worst(st.deep);
+      box.innerHTML =
+        '<div class="result__head"><h2>hĺbková kontrola podľa schémy</h2>' +
+          (level === "ok" ? '<span class="badge badge--ok">bez chýb</span>'
+                          : '<span class="badge badge--bad">nájdené chyby</span>') +
+          '<span class="result__size">' + (st.deepMs / 1000).toFixed(1) + " s</span></div>" +
+        '<div class="result__body">' +
+          '<div class="chks">' + st.deep.map(checkHTML).join("") + "</div>" +
+          '<div class="dlrow">' +
+            '<button class="btn btn--sm btn--ghost" id="vlRun"' + (st.busy ? " disabled" : "") +
+              ">spustiť znova</button>" +
+            '<span class="mergehint">jadro ifcopenshell.validate — rovnaké ako v službe buildingSMART</span>' +
+          "</div>" +
+        "</div>";
+      $("vlRun").addEventListener("click", function () { startJob("validate"); });
+      return;
+    }
+
+    box.innerHTML =
+      '<div class="card__head">hĺbková kontrola podľa schémy</div>' +
+      '<div class="deep__body">' +
+        "<p class=\"help\">Spustí <b>ifcopenshell.validate</b> — to isté jadro, ktoré používa " +
+        "validačná služba buildingSMART. Overí dátové typy atribútov, kardinality, " +
+        "výčtové hodnoty, SELECT typy a pravidlá WHERE zo schémy EXPRESS.</p>" +
+        errNote("validate") + sizeNote(false) +
+        '<div class="dlrow">' +
+          '<button class="btn btn--sm" id="vlRun"' + (st.busy ? " disabled" : "") +
+            '>spustiť hĺbkovú kontrolu <span class="btn__arr">→</span></button>' +
+          '<span class="mergehint">prvé spustenie stiahne ~25 MB knižnice · súbor zostáva vo vašom počítači</span>' +
+        "</div>" +
+      "</div>";
+    $("vlRun").addEventListener("click", function () { startJob("validate"); });
+  }
+
+  // ---- normatívne pravidlá --------------------------------------------------
+  function renderRules() {
+    var box = $("vlRules");
+
+    if (st.busy === "rules") {
+      box.innerHTML = '<div class="card__head">normatívne pravidlá buildingSMART</div>' + busyHTML("vlRStop");
+      $("vlRStop").addEventListener("click", stopJob);
+      return;
+    }
+
+    if (st.rulesState === "done" && st.rules) {
+      var info = st.rulesInfo || {}, sstat = info.status || {};
+      var level = worst(st.rules);
+      box.innerHTML =
+        '<div class="result__head"><h2>normatívne pravidlá buildingSMART</h2>' +
+          (level === "ok" ? '<span class="badge badge--ok">bez chýb</span>'
+           : level === "warn" ? '<span class="badge badge--warn">s výhradami</span>'
+           : '<span class="badge badge--bad">nájdené chyby</span>') +
+          '<span class="result__size">' + (st.rulesMs / 1000).toFixed(0) + " s</span></div>" +
+        '<div class="result__body">' +
+          '<div class="stats">' +
+            statHTML("pravidlá", String(info.rules || 0)) +
+            statHTML("prešlo", String(sstat.passed || 0)) +
+            statHTML("neprešlo", String(sstat.failed || 0)) +
+            statHTML("nevyhodnotené", String(sstat.error || 0)) +
+            statHTML("vypnuté", String(sstat.skipped || 0)) +
+          "</div>" +
+          '<div class="chks">' + st.rules.map(checkHTML).join("") + "</div>" +
+          '<div class="dlrow">' +
+            '<button class="btn btn--sm btn--ghost" id="vlRRun"' + (st.busy ? " disabled" : "") +
+              ">spustiť znova</button>" +
+            '<span class="mergehint">ifc-gherkin-rules · vypnuté pravidlá sú tak označené priamo ' +
+              "v repozitári buildingSMART · najviac 25 nálezov na pravidlo</span>" +
+          "</div>" +
+        "</div>";
+      $("vlRRun").addEventListener("click", function () { startJob("rules"); });
+      return;
+    }
+
+    box.innerHTML =
+      '<div class="card__head">normatívne pravidlá buildingSMART</div>' +
+      '<div class="deep__body">' +
+        "<p class=\"help\">Spustí <b>ifc-gherkin-rules</b> — 104 predpisov, ktoré vo validačnej " +
+        "službe buildingSMART pokrývajú <b>Implementer Agreements</b>, <b>Informal Propositions</b> " +
+        "a odporúčané praktiky: priestorová štruktúra, väzby, umiestnenie, reprezentácie, " +
+        "jednotky, property sety, georeferencovanie a ďalšie.</p>" +
+        errNote("rules") + sizeNote(true) +
+        '<div class="note"><span class="note__i">i</span><span>Pravidlá pracujú s celým modelom, ' +
+          "takže beh je pomalší než kontrola schémy — pri modeli so 100 tisíc entitami " +
+          "rádovo dve minúty. Priebeh vidíte počas behu a dá sa zrušiť.</span></div>" +
+        '<div class="dlrow">' +
+          '<button class="btn btn--sm" id="vlRRun"' + (st.busy ? " disabled" : "") +
+            '>spustiť normatívne pravidlá <span class="btn__arr">→</span></button>' +
+          '<span class="mergehint">prvé spustenie stiahne ~12 MB navyše · súbor zostáva vo vašom počítači</span>' +
+        "</div>" +
+      "</div>";
+    $("vlRRun").addEventListener("click", function () { startJob("rules"); });
   }
 
   // Hlásenia z ifcopenshell rozdelíme na dve kontroly: hodnoty atribútov
@@ -617,6 +726,41 @@
     return [cAttr, cRule];
   }
 
+  // Výsledky normatívnych pravidiel. Závažnosť určuje samotné pravidlo:
+  // ERROR = porušená dohoda implementátorov / informal proposition,
+  // WARNING = odporúčaná praktika.
+  function ruleChecks(data) {
+    var cErr = chk("gerr", "Normatívne pravidlá",
+      "Implementer Agreements a Informal Propositions — záväzné predpisy buildingSMART.");
+    var cWarn = chk("gwarn", "Odporúčané praktiky",
+      "Pravidlá, ktoré neporušujú schému, ale idú proti bežnej praxi.");
+    var cSkip = chk("gskip", "Nevyhodnotené pravidlá",
+      "Pravidlá, ktoré v prehliadači nedobehli — napríklad preto, že potrebujú knižnicu, " +
+      "ktorá sa do WebAssembly nedá preložiť (georeferencovanie, priestorový index).");
+
+    (data.outcomes || []).forEach(function (o) {
+      var c = o.severity === "ERROR" ? cErr : cWarn;
+      var rule = (o.feature || "").split(" - ")[0];
+      var parts = [];
+      if (o.expected) parts.push("očakávané: " + o.expected);
+      if (o.observed) parts.push("zistené: " + o.observed);
+      var line = (o.inst ? "#" + o.inst + " " : "") + rule +
+                 (parts.length ? " — " + parts.join(" · ") : "");
+      var full = (o.feature || "") + "\n" + (o.code ? o.code + "\n" : "") + parts.join("\n");
+      add(c, line.length > 260 ? line.slice(0, 260) + "…" : line, -1, full);
+    });
+
+    (data.errored || []).forEach(function (name) { add(cSkip, name); });
+
+    seal(cErr, "bad", "žiadne porušené pravidlo",
+         function (n) { return n.toLocaleString("sk-SK") + " " + plural(n, "porušenie", "porušenia", "porušení"); });
+    seal(cWarn, "warn", "žiadne výhrady",
+         function (n) { return n.toLocaleString("sk-SK") + " " + plural(n, "výhrada", "výhrady", "výhrad"); });
+    seal(cSkip, "warn", "všetky pravidlá dobehli",
+         function (n) { return n + " " + plural(n, "pravidlo", "pravidlá", "pravidiel"); });
+    return [cErr, cWarn, cSkip];
+  }
+
   // =========================================================================
   //  Prepojenie na rozhranie
   // =========================================================================
@@ -632,11 +776,9 @@
       AppBar.setBadge("");
     },
     reset: function () {
-      clearInterval(st.timer);
-      engine.stop();
+      resetJobs();
       st.file = null; st.name = ""; st.size = 0; st.idx = null;
-      st.checks = null; st.stats = null; st.deep = null;
-      st.deepState = "idle"; st.deepMsg = "";
+      st.checks = null; st.stats = null;
       renderDrop("");
     }
   };

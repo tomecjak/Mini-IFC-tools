@@ -103,11 +103,12 @@
           <span class="tool__name">validate</span>
           <span class="tool__sub">kontrola súboru</span>
         </div>
-        <p>Rýchla kontrola zápisu a väzieb hneď po nahratí. Na vyžiadanie aj hĺbková kontrola podľa schémy EXPRESS jadrom IfcOpenShell — tým istým, ktoré poháňa validačnú službu buildingSMART.</p>
+        <p>Rýchla kontrola zápisu a väzieb hneď po nahratí. Na vyžiadanie aj hĺbková kontrola podľa schémy EXPRESS a 104 normatívnych pravidiel — tým istým jadrom, ktoré poháňa validačnú službu buildingSMART.</p>
         <ul class="tool__list">
           <li>štruktúra, čísla entít, GlobalId</li>
           <li>visiace odkazy a nepoužité entity</li>
           <li>typy atribútov a pravidlá WHERE</li>
+          <li>Implementer Agreements a praktiky</li>
         </ul>
       </div>
       <span class="tool__go">otvoriť validate <span class="tool__arr">→</span></span>
@@ -300,7 +301,7 @@
   <section class="card toolhead" id="vlHead">
     <div class="kicker kicker--chk">// kontrola kvality</div>
     <h1>Validácia IFC súboru</h1>
-    <p class="lede">Dve úrovne kontroly. <b>Rýchla</b> prebehne hneď po nahratí — štruktúra súboru, verzia schémy, zápis entít, duplicitné čísla a GlobalId, visiace odkazy. <b>Hĺbková</b> sa spúšťa tlačidlom a použije jadro <b>ifcopenshell.validate</b>, teda tú istú knižnicu, na ktorej stojí validačná služba buildingSMART: dátové typy atribútov, kardinality, výčty a pravidlá WHERE zo schémy EXPRESS. Súbor sa nikam neodosiela.</p>
+    <p class="lede">Tri úrovne kontroly. <b>Rýchla</b> prebehne hneď po nahratí — štruktúra súboru, verzia schémy, zápis entít, duplicitné čísla a GlobalId, visiace odkazy. <b>Hĺbková</b> použije jadro <b>ifcopenshell.validate</b>: dátové typy atribútov, kardinality, výčty a pravidlá WHERE zo schémy EXPRESS. <b>Normatívne pravidlá</b> spustia 104 predpisov z <b>ifc-gherkin-rules</b> — Implementer Agreements a Informal Propositions. Posledné dve sa spúšťajú tlačidlom, lebo si stiahnu knižnice validačnej služby buildingSMART. Súbor sa nikam neodosiela.</p>
   </section>
 
   <!-- nahranie súboru -->
@@ -318,6 +319,7 @@
     <div class="metastrip" id="vlChips"></div>
     <section class="card result" id="vlSummary"></section>
     <section class="card deep" id="vlDeep"></section>
+    <section class="card deep" id="vlRules"></section>
   </section>
 
 </div>

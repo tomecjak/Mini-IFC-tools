@@ -488,7 +488,9 @@ details.adv[open] > summary::before{content:"–"}
 .deep__body{padding:16px;display:flex;flex-direction:column;gap:12px}
 .deep__body .help{margin:0}
 .deep__run{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.deep__st{min-width:220px;flex:1}
 .deep__msg{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+.deep__st .pbar{width:100%;margin-top:6px}
 .deep__run .btn{margin-left:auto}
 
 /* =========================================================================
