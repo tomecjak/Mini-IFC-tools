@@ -102,6 +102,10 @@ body{
 .bar__btn:hover{background:var(--surface);color:var(--ink);border-color:var(--faint)}
 .bar__btn--go{background:var(--action);border-color:var(--action);color:#fff;padding:4px 10px}
 .bar__btn--go:hover{background:#000;border-color:#000;color:#fff}
+/* návrat k nástroju, z ktorého sa sem používateľ preklikol — stojí pri pravom
+   okraji spolu s ostatnými tlačidlami lišty */
+.bar__btn--back{flex:none;color:var(--check);border-color:var(--check-line);background:var(--check-tint)}
+.bar__btn--back:hover{background:var(--surface);color:var(--check);border-color:var(--check)}
 
 /* ---------- päta stránky ---------- */
 .sitefoot{
@@ -484,6 +488,19 @@ details.adv[open] > summary::before{content:"–"}
 .fnd__l{color:var(--faint);flex:none;white-space:nowrap}
 .fnd__rest{font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:6px}
 
+/* nález, ktorý sa dá otvoriť v prehliadači kódu — kliknuteľný je celý riadok */
+.fnd li.is-link{cursor:pointer}
+.fnd li.is-link:hover{background:var(--check-tint)}
+.fnd__go{
+  margin-left:auto;flex:none;align-self:flex-start;
+  font:inherit;font-size:10.5px;line-height:1.5;white-space:nowrap;
+  padding:0 6px;border:1px solid var(--check-line);background:var(--surface);
+  color:var(--check);cursor:pointer;opacity:.6;
+}
+.fnd li.is-link:hover .fnd__go{opacity:1;background:var(--check-tint)}
+.fnd__go:focus-visible{opacity:1;outline:2px solid var(--check);outline-offset:1px}
+.fnd__tip{color:var(--faint);font-weight:400}
+
 /* hĺbková kontrola */
 .deep__body{padding:16px;display:flex;flex-direction:column;gap:12px}
 .deep__body .help{margin:0}
@@ -659,6 +676,14 @@ details.pop.is-on > summary{background:var(--secondary);border-color:var(--secon
 .doclink{text-decoration:none;color:inherit}
 .doclink:hover{text-decoration:underline;text-underline-offset:3px}
 .doclink__x{font-size:9px;margin-left:3px;opacity:.6;vertical-align:2px}
+/* odkaz na český preklad — štítok vedľa názvu triedy, property setu či číselníka */
+.czlink{
+  font-family:var(--mono);font-size:9px;letter-spacing:.06em;color:var(--muted);
+  border:1px solid var(--line);padding:1px 4px;white-space:nowrap;flex:none;
+  text-decoration:none;align-self:center;
+}
+.czlink:hover{color:var(--secondary);border-color:var(--secondary)}
+.czlink .doclink__x{margin-left:2px}
 .dt__doc{
   font-family:var(--mono);font-size:9.5px;letter-spacing:.04em;color:var(--faint);
   border:1px solid var(--line);padding:1px 5px;white-space:nowrap;

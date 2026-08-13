@@ -152,10 +152,18 @@
     return { key: key, title: title, desc: desc, level: "ok", note: "", items: [], total: 0 };
   }
   // Nálezy sa zbierajú len po strop — u rozbitého súboru ich môžu byť milióny.
-  function add(c, text, line, full) {
+  // id = číslo entity, ktorej sa nález týka (kvôli prekliku do prehliadača kódu).
+  function add(c, text, line, full, id) {
     c.total++;
     if (c.items.length < COLLECT_MAX)
-      c.items.push({ text: text, line: line == null ? -1 : line, full: full || "" });
+      c.items.push({ text: text, line: line == null ? -1 : line, full: full || "",
+                     id: entId(id) });
+  }
+  // Číslo entity z rôznych zdrojov (JS kontrola dáva číslo, knižnice text „#123“).
+  function entId(v) {
+    if (v == null) return -1;
+    var n = typeof v === "number" ? v : parseInt(String(v).replace(/^\s*#/, ""), 10);
+    return (isFinite(n) && n >= 0) ? n : -1;
   }
   function seal(c, level, okNote, badNote) {
     if (c.total) { c.level = level; c.note = badNote(c.total); }
@@ -222,8 +230,8 @@
       var rooted = new Uint8Array(maxId + 2);      // entita má GlobalId (samostatný objekt)
       var defined = new Uint8Array(maxId + 2);     // #ID je v súbore zapísané
       var guids = new Map();                       // GlobalId → riadok prvého výskytu
-      var unknown = new Map();                     // neznáma trieda → počet
-      var argsBad = new Map();                     // "TRIEDA n/m" → {count, line}
+      var badTypes = new Set();                    // triedy, pri ktorých niečo nesedí (len na súhrn)
+      var wantArgs = new Map();                    // trieda → počet atribútov podľa schémy súboru
       var missRefs = new Map();                    // chýbajúce #ID → riadok prvého odkazu
 
       // Odkazy na iné entity. „Podozrivé" sa odložia a overia až na konci —
@@ -267,7 +275,7 @@
           var id = +head[1];
           var type = head[2].toUpperCase();
           if (id <= maxId) {
-            if (seenId[id]) add(cIds, "Číslo #" + id + " je použité viackrát.", line);
+            if (seenId[id]) add(cIds, "Číslo #" + id + " je použité viackrát.", line, "", id);
             else seenId[id] = 1;
             defined[id] = 1;
           }
@@ -282,41 +290,50 @@
             else if (masked[c] === ")") { depth--; if (!depth) { end = c; break; } }
           }
           if (end < 0) {
-            add(cSyntax, "#" + id + " " + type + " — zátvorky nie sú párové", line);
+            add(cSyntax, "#" + id + " " + type + " — zátvorky nie sú párové", line, "", id);
             i++; continue;
           }
           if (masked.slice(end + 1).trim()) {
-            add(cSyntax, "#" + id + " " + type + " — za uzatváracou zátvorkou je ďalší text", line);
+            add(cSyntax, "#" + id + " " + type + " — za uzatváracou zátvorkou je ďalší text", line, "", id);
           }
           var args = C.splitTopLevel(body.slice(open + 1, end), masked.slice(open + 1, end));
 
           scanRefs(masked, line);
 
           // trieda a počet atribútov podľa registra schémy
+          // Nález sa zapisuje pre každú entitu zvlášť — aj keď je chyba pri celej
+          // triede, používateľ potrebuje vedieť konkrétne #ID, na ktoré sa preklikne.
           var info = A ? A.attrsFor(type, schema, args.length) : null;
-          if (!info) unknown.set(type, (unknown.get(type) || 0) + 1);
-          else {
+          if (!info) {
+            badTypes.add(type);
+            add(cTypes, "#" + id + " " + type + " — trieda nie je v registri schémy", line, "", id);
+          } else {
             if (info.names.length !== args.length) {
-              // koľko atribútov čaká práve schéma súboru (info mohlo sadnúť na inú verziu)
-              var ref = A.attrsFor(type, schema, 0) || info;
-              var key = type + " " + args.length + "/" + ref.names.length;
-              var rec = argsBad.get(key);
-              if (rec) rec.count++;
-              else argsBad.set(key, { count: 1, line: line, type: type,
-                                      got: args.length, want: ref.names.length });
+              // koľko atribútov čaká práve schéma súboru (info mohlo sadnúť na inú
+              // verziu); pre triedu je to vždy rovnaké, tak sa to počíta raz
+              var want = wantArgs.get(type);
+              if (want == null) {
+                var ref = A.attrsFor(type, schema, 0);
+                want = (ref || info).names.length;
+                if (ref) wantArgs.set(type, want);
+              }
+              badTypes.add(type);
+              add(cTypes, "#" + id + " " + type + " — " + args.length + " " +
+                          plural(args.length, "atribút", "atribúty", "atribútov") +
+                          ", schéma očakáva " + want, line, "", id);
             }
             if (info.names[0] === "GlobalId") {
               if (id <= maxId) rooted[id] = 1;
               var g = args.length ? args[0].trim() : "";
               if (g.charAt(0) !== "'" || g.charAt(g.length - 1) !== "'") {
-                add(cGuid, "#" + id + " " + type + " — GlobalId nie je textová hodnota", line);
+                add(cGuid, "#" + id + " " + type + " — GlobalId nie je textová hodnota", line, "", id);
               } else {
                 var v = g.slice(1, -1);
                 if (!/^[0-9A-Za-z_$]{22}$/.test(v)) {
-                  add(cGuid, "#" + id + " " + type + " — GlobalId '" + v + "' nemá tvar 22 znakov", line);
+                  add(cGuid, "#" + id + " " + type + " — GlobalId '" + v + "' nemá tvar 22 znakov", line, "", id);
                 } else if (guids.has(v)) {
                   add(cGuid, "#" + id + " " + type + " — GlobalId '" + v +
-                             "' už má entita na riadku " + (guids.get(v) + 1), line);
+                             "' už má entita na riadku " + (guids.get(v) + 1), line, "", id);
                 } else guids.set(v, line);
               }
             }
@@ -331,6 +348,7 @@
 
       function finish() {
         // visiace referencie — až teraz, keď sú známe všetky zapísané čísla
+        // preklik vedie na entitu, ktorá sa odkazuje — cieľ odkazu neexistuje
         missRefs.forEach(function (line, r) {
           if (r <= maxId && defined[r]) return;
           add(cRefs, "Odkaz #" + r + " nesmeruje na žiadnu entitu v súbore.", line);
@@ -341,16 +359,9 @@
           var id = idx.stmtIds[s];
           if (id < 0 || id > maxId || !defined[id]) continue;
           if (refd[id] || rooted[id]) continue;
-          add(cOrph, "#" + id + " " + idx.stmtTypes[s] + " — na entitu sa nikto neodkazuje", idx.stmtFrom[s]);
+          add(cOrph, "#" + id + " " + idx.stmtTypes[s] + " — na entitu sa nikto neodkazuje",
+              idx.stmtFrom[s], "", id);
         }
-
-        unknown.forEach(function (count, type) {
-          add(cTypes, type + " — trieda nie je v registri schémy" + (count > 1 ? " (" + count + "×)" : ""));
-        });
-        argsBad.forEach(function (r) {
-          add(cTypes, r.type + " — " + r.got + " " + plural(r.got, "atribút", "atribúty", "atribútov") +
-                      ", schéma očakáva " + r.want + (r.count > 1 ? " (" + r.count + "×)" : ""), r.line);
-        });
 
         seal(cSyntax, "bad", "všetky entity majú platný zápis",
              function (c) { return c + " " + plural(c, "chybný zápis", "chybné zápisy", "chybných zápisov"); });
@@ -361,8 +372,13 @@
         seal(cGuid, "bad", guids.size.toLocaleString("sk-SK") + " " +
              plural(guids.size, "objekt", "objekty", "objektov") + " s jedinečným GlobalId",
              function (c) { return c + " " + plural(c, "problém", "problémy", "problémov"); });
+        // nálezov je toľko, koľko entít — v súhrne sa hodí aj počet dotknutých tried
         seal(cTypes, "warn", "všetky triedy pozná register schémy",
-             function (c) { return c + " " + plural(c, "trieda mimo očakávania", "triedy mimo očakávania", "tried mimo očakávania"); });
+             function (c) {
+               var t = badTypes.size;
+               return c.toLocaleString("sk-SK") + " " + plural(c, "entita", "entity", "entít") +
+                      " · " + t + " " + plural(t, "trieda", "triedy", "tried") + " mimo očakávania";
+             });
         seal(cOrph, "info", "žiadne entity navyše",
              function (c) { return c.toLocaleString("sk-SK") + " " + plural(c, "entita", "entity", "entít"); });
 
@@ -406,16 +422,30 @@
   function itemsHTML(c) {
     if (!c.total) return "";
     var shown = c.items.slice(0, LIST_MAX);
+    var links = 0;
     var rows = shown.map(function (it) {
+      // nález, ku ktorému poznáme entitu alebo riadok, sa dá otvoriť
+      // v prehliadači kódu — celý riadok zoznamu je vtedy kliknuteľný
+      var go = it.id >= 0 || it.line >= 0;
+      if (go) links++;
+      var where = it.id >= 0 ? "entitu #" + it.id : "riadok " + (it.line + 1);
       // celé hlásenie z knižnice býva na desiatky riadkov — v zozname je skrátené,
       // úplné znenie ukáže prehliadač v bublinovej nápovede
-      return "<li" + (it.full ? ' title="' + esc(it.full) + '"' : "") + ">" +
+      var tip = it.full ? it.full + "\n\n" : "";
+      if (go) tip += "Kliknutím otvoríte " + where + " v prehliadači kódu.";
+      return "<li" + (go ? ' class="is-link" data-goid="' + it.id + '" data-goline="' + it.line + '"' : "") +
+             (tip ? ' title="' + esc(tip) + '"' : "") + ">" +
              (it.line >= 0 ? '<span class="fnd__l">riadok ' + (it.line + 1) + "</span>" : "") +
-             "<span>" + esc(it.text) + "</span></li>";
+             "<span>" + esc(it.text) + "</span>" +
+             (go ? '<button class="fnd__go" type="button" title="Otvoriť ' + esc(where) +
+                   ' v prehliadači kódu">kód ↗</button>' : "") +
+             "</li>";
     }).join("");
     var rest = c.total - shown.length;
     return '<details class="chk__more"><summary>zobraziť nálezy (' +
-             c.total.toLocaleString("sk-SK") + ")</summary>" +
+             c.total.toLocaleString("sk-SK") + ")" +
+             (links ? '<span class="fnd__tip">nález otvoríte kliknutím v prehliadači kódu</span>' : "") +
+             "</summary>" +
              '<ul class="fnd">' + rows + "</ul>" +
              (rest > 0 ? '<div class="fnd__rest">…a ďalších ' + rest.toLocaleString("sk-SK") +
                          " — vypisuje sa prvých " + LIST_MAX + "</div>" : "") +
@@ -716,7 +746,7 @@
       // do zoznamu ich stlačíme na jeden riadok
       var msg = (s.message || "").replace(/\s+/g, " ").trim();
       var short = msg.length > 240 ? msg.slice(0, 240) + "…" : msg;
-      add(c, (who ? who + what + " — " : "") + short, -1, s.message);
+      add(c, (who ? who + what + " — " : "") + short, -1, s.message, s.id);
     });
 
     seal(cAttr, "bad", "všetky hodnoty zodpovedajú schéme",
@@ -747,7 +777,7 @@
       var line = (o.inst ? "#" + o.inst + " " : "") + rule +
                  (parts.length ? " — " + parts.join(" · ") : "");
       var full = (o.feature || "") + "\n" + (o.code ? o.code + "\n" : "") + parts.join("\n");
-      add(c, line.length > 260 ? line.slice(0, 260) + "…" : line, -1, full);
+      add(c, line.length > 260 ? line.slice(0, 260) + "…" : line, -1, full, o.inst);
     });
 
     (data.errored || []).forEach(function (name) { add(cSkip, name); });
@@ -767,6 +797,29 @@
   $("fileC").addEventListener("change", function (e) {
     if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
     e.target.value = "";
+  });
+
+  /* Preklik nálezu do prehliadača kódu. Otvorí sa ten istý súbor a v ňom entita,
+     ktorej sa nález týka; keď číslo entity nepoznáme (napr. visiaci odkaz),
+     skočí sa na riadok, kde sa nález našiel. */
+  function openInCode(id, line) {
+    if (!st.file || !window.ViewerTool || !window.ViewerTool.open) return;
+    // kam sa má vrátiť tlačidlo v hornej lište — aj s posunom na ten istý nález
+    var y = window.scrollY;
+    window.ViewerTool.open({
+      file: st.file, id: id, line: line,
+      back: { label: "← späť na validáciu", go: function () {
+        if (window.AppBar && AppBar.go) AppBar.go("validate");
+        else location.hash = "#/validate";
+        window.scrollTo(0, y);
+      } }
+    });
+  }
+
+  $("vlApp").addEventListener("click", function (e) {
+    var li = e.target.closest("li.is-link");
+    if (!li) return;
+    openInCode(+li.getAttribute("data-goid"), +li.getAttribute("data-goline"));
   });
 
   window.ValidateTool = {

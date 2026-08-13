@@ -12,6 +12,9 @@
   var HIT_LIMIT = 5000;    // strop pre počet nájdených riadkov
 
   var st = {
+    file: null,           // načítaný súbor (kvôli prekliku z validácie)
+    pending: null,        // cieľ, na ktorý sa má skočiť hneď po načítaní
+    back: null,           // { label, go } — návrat tam, odkiaľ preklik prišiel
     name: "", size: 0, idx: null,
     visible: null,        // Int32Array indexov riadkov, alebo null = všetky
     visEntities: null,    // koľko entít prejde filtrom (null = všetky)
@@ -95,7 +98,7 @@
   }
 
   function handleFile(file) {
-    st.name = file.name; st.size = file.size;
+    st.file = file; st.name = file.name; st.size = file.size;
     progress("číta sa súbor…", null);
     var reader = new FileReader();
     reader.onload = function () {
@@ -109,9 +112,9 @@
           st.idx = idx; st.catCache = new Map();
           startViewer();
         })
-        .catch(function (err) { renderDrop(err.message); });
+        .catch(function (err) { st.pending = null; renderDrop(err.message); });
     };
-    reader.onerror = function () { renderDrop("Chyba pri čítaní súboru."); };
+    reader.onerror = function () { st.pending = null; renderDrop("Chyba pri čítaní súboru."); };
     reader.readAsText(file);
   }
 
@@ -129,7 +132,7 @@
     $("vwHead").hidden = true;       // po načítaní súboru je popis zbytočný, kód dostane viac miesta
     panel().hidden = true;
     $("vwApp").hidden = false;
-    if (window.AppBar) AppBar.setStatus(st.name);
+    syncBar();                       // až teraz je čo do lišty napísať
     $("vwChips").innerHTML =
       '<div class="m">schéma <b>' + esc(idx.schema) + "</b></div>" +
       (idx.lengthUnit !== "?" ? '<div class="m">jednotka <b>' + esc(idx.lengthUnit) + "</b></div>"
@@ -151,6 +154,61 @@
         if (idx.stmtIds[i] >= 0) { selectStmt(i, false, false); break; }
       }
     }
+    // preklik z inej časti stránky (nález validácie) má prednosť pred ukážkou
+    if (st.pending) { var t = st.pending; st.pending = null; goTarget(t); }
+  }
+
+  // =========================================================================
+  //  Preklik zvonku — otvorenie konkrétnej entity (volá sa z validácie)
+  // =========================================================================
+  // Cieľ je buď #ID entity, alebo riadok súboru; #ID má prednosť. Keď sa nenájde
+  // ani jedno, prehliadač ostane tam, kde bol, a vráti sa false.
+  function goTarget(t) {
+    if (!st.idx || !t) return false;
+    var s = null;
+    if (t.id != null && t.id >= 0) {
+      var byId = st.idx.byId.get(t.id);
+      if (byId != null) s = byId;
+    }
+    if (s == null && t.line != null && t.line >= 0 && t.line < st.idx.lineCount) {
+      var byLine = st.idx.lineStmt[t.line];
+      if (byLine >= 0) s = byLine;
+    }
+    if (s == null) {
+      // ani entita, ani príkaz — aspoň sa posunieme na riadok
+      if (t.line != null && t.line >= 0) {
+        var r = rowOfLine(t.line);
+        if (r >= 0) { scrollToRow(r, true); return true; }
+      }
+      return false;
+    }
+    // cieľ mohol byť skrytý filtrom tried alebo prepínačom „Upravené“ — preklik
+    // má entitu ukázať, takže sa obmedzenie zruší
+    if (rowOfLine(st.idx.stmtFrom[s]) < 0) {
+      st.filter = null; st.onlyEdited = false;
+      renderTypeList(st.typeQuery);
+      applyFilter();
+    }
+    selectStmt(s, true, true);
+    return true;
+  }
+
+  function sameFile(f) {
+    return !!(st.file && f && st.file.name === f.name && st.file.size === f.size &&
+              st.file.lastModified === f.lastModified);
+  }
+
+  /* Obsah hornej lišty patriaci tomuto nástroju: názov súboru, počet zmien,
+     tlačidlo na stiahnutie upravenej kópie a návrat tam, odkiaľ preklik prišiel.
+     Volá sa po načítaní súboru aj po každom prepnutí na tento nástroj (js/nav.js). */
+  function syncBar() {
+    if (!window.AppBar) return;
+    AppBar.setStatus(st.idx ? st.name : "prehliadač zdrojového kódu");
+    var n = st.origArgs.size;
+    AppBar.setBadge(n ? n + (n === 1 ? " zmena" : n < 5 ? " zmeny" : " zmien") : "");
+    $("vwSave").hidden = n === 0;
+    if (AppBar.setBack) AppBar.setBack(st.idx && st.back ? st.back.label : "",
+                                       st.back ? st.back.go : null);
   }
 
   function measureChar() {
@@ -345,6 +403,18 @@
              (d.exact ? "" : " — trieda nie je v schéme tohto súboru") + '">' +
              label + '<span class="doclink__x" aria-hidden="true">↗</span></a>';
   }
+  /* Odkaz na neoficiálny český preklad (ifc.ardit.cz). Ponúka sa len pri súboroch
+     so schémou IFC4X3_ADD2 — pre triedy, property sety, veličiny a číselníky, ktoré tam sú.
+     Ak heslo na stránke nie je, nevráti sa nič a rozloženie ostáva nezmenené. */
+  function czLink(name, cls) {
+    var d = window.IFCDocsCZ && st.idx ? window.IFCDocsCZ.find(name, st.idx.schema) : null;
+    if (!d) return "";
+    return '<a class="czlink' + (cls ? " " + cls : "") + '" href="' + esc(d.url) +
+             '" target="_blank" rel="noopener noreferrer" title="' +
+             "Otvoriť český preklad na ifc.ardit.cz · " + esc(d.name) + '">' +
+             'CZ<span class="doclink__x" aria-hidden="true">↗</span></a>';
+  }
+
   // Upozornenie, že odkaz vedie do dokumentácie inej verzie IFC, než hlási súbor.
   // Pri zhode so schémou súboru sa nič nezobrazuje — to je bežný stav.
   function docNote(type) {
@@ -440,7 +510,17 @@
                   : qt === "IFCPROPERTYENUMERATEDVALUE" ? qa[2]
                   : qt === "IFCPROPERTYLISTVALUE" ? qa[2]
                   : qa[2];
-        props.push({ name: C.decodeIfcText(qa[0] || ""), value: value, id: +mm[1], type: qt });
+        // názov číselníka (PEnum_…) nesie až entita IFCPROPERTYENUMERATION, na ktorú
+        // sa hodnota odkazuje — bez nej sa na preklad číselníka odkázať nedá
+        var enumName = "";
+        if (qt === "IFCPROPERTYENUMERATEDVALUE") {
+          var er = /^#(\d+)$/.exec((qa[3] || "").trim());
+          var ei = er ? idx.byId.get(+er[1]) : null;
+          if (ei != null && idx.stmtTypes[ei] === "IFCPROPERTYENUMERATION") {
+            enumName = C.decodeIfcText(C.splitArgs(idx.stmtBody(ei))[0] || "");
+          }
+        }
+        props.push({ name: C.decodeIfcText(qa[0] || ""), value: value, id: +mm[1], type: qt, enumName: enumName });
       });
       out.push({ name: C.decodeIfcText(pa[2] || ""), id: idx.stmtIds[pi], type: ptype, props: props });
     });
@@ -490,6 +570,7 @@
         '<div class="dt__head">' +
           (id >= 0 ? '<span class="dt__id">#' + id + "</span>" : "") +
           docLink(type, "dt__type kc-" + cat) +
+          czLink(type) +
           (st.hist.length ? '<button class="dt__back" id="dtBack" title="Späť na predchádzajúcu entitu">← späť</button>' : "") +
         "</div>" +
         // kategória triedy patrí pod jej názov — v hlavičke by tlačidlo „späť“
@@ -847,6 +928,7 @@
                      '<button class="pr__go" data-goid="' + pr.id + '" title="Zobraziť entitu #' + pr.id + " · " + esc(pr.type) + '">' +
                        esc(pr.name || "(bez názvu)") + "</button>" +
                      docLink(pr.type, "pr__t", "↗") +
+                     czLink(pr.enumName, "pr__cz") +
                    "</span>" +
                    '<span class="pr__v">' + valHTML(pr.value, 1, true) + "</span>" +
                  "</div>";
@@ -856,6 +938,7 @@
                    esc(p.name || "(bez názvu)") + "</button>" +
                  '<span class="pset__id">#' + p.id + "</span>" +
                  docLink(p.type, "pset__t", p.type.replace(/^IFC/, "")) +
+                 czLink(p.name, "pset__cz") +
                "</div>" +
                (items || '<div class="dt__none">bez vlastností</div>') + "</div>";
       }).join("");
@@ -1002,7 +1085,8 @@
   // =========================================================================
   function wire() {
     $("fileV").addEventListener("change", function (e) {
-      if (e.target.files[0]) handleFile(e.target.files[0]);
+      // súbor vybraný priamo tu už s prekliknutým nálezom nesúvisí
+      if (e.target.files[0]) { st.back = null; handleFile(e.target.files[0]); }
       e.target.value = "";
     });
 
@@ -1098,19 +1182,34 @@
   // Nahratie nového súboru — volá sa z tlačidla v hornej lište (js/nav.js).
   window.ViewerTool = {
     reset: function () {
+      st.file = null; st.pending = null; st.back = null;
       st.idx = null; st.origArgs = new Map(); st.editedStmts = new Set();
       $("vwSave").hidden = true;
       renderDrop();
     },
-    // po prepnutí na tento nástroj doplní do lišty názov súboru, počet zmien
-    // a tlačidlo na stiahnutie upravenej kópie
-    syncBar: function () {
-      if (!window.AppBar) return;
-      AppBar.setStatus(st.idx ? st.name : "prehliadač zdrojového kódu");
-      var n = st.origArgs.size;
-      AppBar.setBadge(n ? n + (n === 1 ? " zmena" : n < 5 ? " zmeny" : " zmien") : "");
-      $("vwSave").hidden = n === 0;
-    }
+
+    /* Otvorenie entity z iného nástroja. t = { file, id, line }.
+       Ak je ten istý súbor už načítaný, skočí sa rovno; inak sa najprv načíta
+       (rozpracované úpravy iného súboru by sa tým stratili, preto sa pýtame —
+       kým sa nepotvrdí, nástroj sa ani neprepne).
+       Vracia false, keď sa nič neotvorilo. */
+    open: function (t) {
+      if (!t || !t.file) return false;
+      var loaded = sameFile(t.file) && !!st.idx;
+      if (!loaded && st.origArgs.size &&
+          !confirm("V prehliadači kódu máte neuložené úpravy súboru " + st.name +
+                   ". Načítaním iného súboru sa stratia. Pokračovať?")) return false;
+      st.back = t.back || null;      // tlačidlo návratu doplní syncBar()
+      // sekcia sa musí zobraziť skôr, než sa počíta posun na riadok — nad
+      // skrytou plochou by vyšiel nulový
+      if (window.AppBar && AppBar.go) AppBar.go("viewer");
+      else location.hash = "#/viewer";
+      if (loaded) return goTarget(t);
+      st.pending = t;
+      handleFile(t.file);
+      return true;
+    },
+    syncBar: syncBar
   };
 
   // ---- štart ---------------------------------------------------------------

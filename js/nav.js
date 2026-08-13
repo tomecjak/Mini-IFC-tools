@@ -23,7 +23,9 @@
   var elPipe  = document.querySelector(".bar__pipe");
   var elSub   = document.getElementById("barSub");
   var elBadge = document.getElementById("barBadge");
+  var elBack  = document.getElementById("barBack");
   var elReset = document.getElementById("barReset");
+  var backFn  = null;
 
   function currentKey() {
     var h = (location.hash || "").replace(/^#\/?/, "").trim();
@@ -37,16 +39,42 @@
       elBadge.hidden = !text;
       elBadge.textContent = text || "";
     },
+    /* Tlačidlo návratu k nástroju, z ktorého sa používateľ preklikol.
+       Bez popisu sa skryje. Nastavuje ho nástroj vo svojom syncBar(). */
+    setBack: function (label, fn) {
+      elBack.hidden = !label;
+      elBack.textContent = label || "";
+      backFn = label ? (fn || null) : null;
+    },
     // sloty patria vždy práve zobrazenému nástroju — pri prepnutí sa vyprázdnia
     resetSlots: function () {
       elBadge.hidden = true; elBadge.textContent = "";
+      elBack.hidden = true; elBack.textContent = ""; backFn = null;
       var save = document.getElementById("vwSave");
       if (save) save.hidden = true;
+    },
+    /* Prepnutie na iný nástroj priamo z kódu (napr. preklik nálezu validácie do
+       prehliadača kódu). Sekcia sa zobrazí hneď — udalosť hashchange príde až
+       po skončení tohto behu a nástroj by dovtedy počítal rozmery nad skrytou
+       plochou. Neskoršie druhé zobrazenie už nič nemení. */
+    go: function (key) {
+      var hash = "#/" + (key || "");
+      if (location.hash !== hash) location.hash = hash;
+      show();
     }
   };
 
+  // Posun stránky si každá sekcia drží vlastný — po návrate z prekliku je
+  // používateľ tam, kde bol, a nie na začiatku dlhého zoznamu nálezov.
+  var scrollAt = {};
+  var lastKey = null;
+
   function show() {
     var key = currentKey(), view = VIEWS[key];
+    var changed = key !== lastKey;
+    if (lastKey !== null && changed) scrollAt[lastKey] = window.scrollY;
+    lastKey = key;
+
     Object.keys(VIEWS).forEach(function (k) {
       var el = document.getElementById(VIEWS[k].el);
       if (el) el.classList.toggle("is-active", k === key);
@@ -65,8 +93,11 @@
 
     elReset.hidden = !view.reset;
     if (view.reset) elReset.textContent = view.reset;
-    window.scrollTo(0, 0);
+    // to isté zobrazenie druhýkrát (go() a po ňom hashchange) posun neruší
+    if (changed) window.scrollTo(0, scrollAt[key] || 0);
   }
+
+  elBack.addEventListener("click", function () { if (backFn) backFn(); });
 
   elReset.addEventListener("click", function () {
     var view = VIEWS[currentKey()];
