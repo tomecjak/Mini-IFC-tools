@@ -15,7 +15,17 @@
   // (buď už v primárnom existujú, alebo väzby na ne vytvárame nanovo)
   const SPATIAL_TYPES = new Set([
     "IFCPROJECT", "IFCSITE", "IFCBUILDING", "IFCBUILDINGSTOREY", "IFCSPACE",
-    "IFCSPATIALZONE", "IFCEXTERNALSPATIALELEMENT"
+    "IFCSPATIALZONE", "IFCEXTERNALSPATIALELEMENT",
+    // IFC 4.3 — infraštruktúrne stavby a ich časti
+    "IFCFACILITY", "IFCFACILITYPART", "IFCFACILITYPARTCOMMON",
+    "IFCBRIDGE", "IFCBRIDGEPART", "IFCROAD", "IFCROADPART",
+    "IFCRAILWAY", "IFCRAILWAYPART", "IFCMARINEFACILITY", "IFCMARINEPART"
+  ]);
+  // Rodina trasy (IFC 4.3) drží pohromade väzba IfcRelNests, ktorú zlúčenie
+  // nekopíruje — samostatne prenesená trasa by stratila úseky.
+  const ALIGNMENT_TYPES = new Set([
+    "IFCALIGNMENT", "IFCALIGNMENTHORIZONTAL", "IFCALIGNMENTVERTICAL",
+    "IFCALIGNMENTCANT", "IFCALIGNMENTSEGMENT"
   ]);
   const SHARED_RESOURCE_TYPES = new Set([
     "IFCGEOMETRICREPRESENTATIONCONTEXT", "IFCGEOMETRICREPRESENTATIONSUBCONTEXT",
@@ -27,7 +37,7 @@
   // Typy kontajnerov umiestnenia / reprezentácie (priestorová štruktúra, do ktorej
   // fyzické produkty patria) — slúžia na rozpoznanie „samostatných objektov“.
   const NON_OBJECT_TYPES = new Set([
-    ...SPATIAL_TYPES,
+    ...SPATIAL_TYPES, ...ALIGNMENT_TYPES,
     "IFCOPENINGELEMENT", "IFCVOIDINGFEATURE"
   ]);
 
@@ -315,8 +325,11 @@
         out.push({ id: e.id, type: e.type, name: productName(e) || globalId(e) });
       }
     }
-    // najprv podlažia, potom budovy, potom areály
-    const rank = t => (t === "IFCBUILDINGSTOREY" ? 0 : t === "IFCBUILDING" ? 1 : t === "IFCSITE" ? 2 : 3);
+    // najprv podlažia a časti stavieb, potom budovy a stavby (aj IFC 4.3), potom areály
+    const rank = t => (t === "IFCBUILDINGSTOREY" ? 0 :
+      /PART(COMMON)?$/.test(t) ? 1 :
+      t === "IFCBUILDING" || t === "IFCFACILITY" || t === "IFCBRIDGE" || t === "IFCROAD" ||
+      t === "IFCRAILWAY" || t === "IFCMARINEFACILITY" ? 2 : t === "IFCSITE" ? 3 : 4);
     return out.sort((a, b) => rank(a.type) - rank(b.type) || a.id - b.id);
   }
 
@@ -343,6 +356,11 @@
       }
     }
     return fallback;
+  }
+
+  function isLocalPlacement(model, id) {
+    const e = model.entities.get(id);
+    return !!e && e.type === "IFCLOCALPLACEMENT";
   }
 
   function objectPlacementOf(ent) {
@@ -549,7 +567,9 @@
         const pe = B.entities.get(pid);
         if (!pe) continue;
         const pl = objectPlacementOf(pe);
-        if (pl != null) { cutPlacementRelTo.add(pl); importPlacementByProduct.set(pid, pl); }
+        // lineárne umiestnenie (IfcLinearPlacement, IFC 4.3) je viazané na trasu —
+        // nedá sa preniesť na kontajner, zostáva pôvodné
+        if (pl != null && isLocalPlacement(B, pl)) { cutPlacementRelTo.add(pl); importPlacementByProduct.set(pid, pl); }
       }
     }
 
@@ -622,7 +642,7 @@
       // režim zachovania pôvodného umiestnenia + posun: posunieme vlastné umiestnenie každého produktu
       for (const pid of opts.importIds) {
         const plOld = objectPlacementOf(B.entities.get(pid) || {});
-        if (plOld == null) continue;
+        if (plOld == null || !isLocalPlacement(B, plOld)) continue;
         const plNew = idMap.get(plOld);
         const rec = emitted.find(x => x.id === plNew);
         if (!rec) continue;

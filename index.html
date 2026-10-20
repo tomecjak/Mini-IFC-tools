@@ -8,6 +8,16 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/styles.css">
+<!-- knižnice 3D prehliadača — sťahujú sa až pri prvom otvorení modelu (js/model.js) -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+    "web-ifc": "https://cdn.jsdelivr.net/npm/web-ifc@0.0.77/web-ifc-api.js"
+  }
+}
+</script>
 </head>
 <body>
 
@@ -42,10 +52,11 @@
     <div class="card hero__main">
       <div class="kicker kicker--sec">// lokálne nástroje</div>
       <h1>Upravuj IFC súbory<br>priamo v prehliadači.</h1>
-      <p class="lede">Nástroje pracujú s textovou podobou IFC (STEP / ISO-10303-21). Súbory sa  nikam neukladajú — prehľadávanie, editácia, zlučovanie aj kontrola bežia len vo vašom prehliadači.</p>
+      <p class="lede">Nástroje pracujú s textovou podobou IFC (STEP / ISO-10303-21). Súbory sa nikam neukladajú — prehliadanie v 3D, editácia, zlučovanie aj kontrola bežia len vo vašom prehliadači.</p>
       <div class="facts">
         <div class="fact"><div class="fact__k">Schémy</div><div class="fact__v">2x3 · 4 · 4.3</div></div>
         <div class="fact"><div class="fact__k">Limit</div><div class="fact__v">~200 MB</div></div>
+        <div class="fact"><div class="fact__k">Trasy</div><div class="fact__v">IfcAlignment</div></div>
         <div class="fact"><div class="fact__k">Upload</div><div class="fact__v is-ok">žiadny</div></div>
       </div>
     </div>
@@ -114,6 +125,23 @@
         </ul>
       </div>
       <span class="tool__go">otvoriť validate <span class="tool__arr">→</span></span>
+    </a>
+    <a class="tool tool--model" href="#/model">
+      <div class="tool__b">
+        <div class="tool__h">
+          <span class="tool__no">[04]</span>
+          <span class="tool__name">model</span>
+          <span class="tool__sub">3D prehliadač a koordinácia</span>
+        </div>
+        <p>Model v 3D — aj viac súborov naraz v spoločných súradniciach projektu. Pre IFC 4.3 vykreslí os trasy (IfcAlignment) so staničením a urobí priečne rezy v ľubovoľnom staničení.</p>
+        <ul class="tool__list">
+          <li>viac modelov naraz, farba podľa modelu</li>
+          <li>triedy, skrytie, izolácia, vlastnosti</li>
+          <li>trasa IFC 4.3 a staničenie</li>
+          <li>priečne rezy + export série do SVG</li>
+        </ul>
+      </div>
+      <span class="tool__go">otvoriť model <span class="tool__arr">→</span></span>
     </a>
   </section>
 
@@ -326,6 +354,105 @@
 
 </div>
 
+<!-- ======================= NÁSTROJ 4 — 3D MODEL A KOORDINÁCIA ======================= -->
+<div class="sheet view" id="view-model">
+
+  <section class="card toolhead" id="mdHead">
+    <div class="kicker kicker--mod">// 3d · koordinácia · ifc 4.3</div>
+    <h1>Prehliadač IFC modelov</h1>
+    <p class="lede">Model v 3D — <b>aj viac súborov naraz</b>, umiestnených v spoločných súradniciach projektu, aby sa dali skontrolovať kolízie a nadväznosti profesií. Pri <b>IFC 4.3</b> sa vykreslí os trasy (<code>IfcAlignment</code>) so staničením a v ľubovoľnom staničení sa urobí <b>priečny rez</b> cez všetky načítané modely. Súbory zostávajú vo vašom počítači — z internetu sa sťahujú len knižnice three.js a web-ifc.</p>
+  </section>
+
+  <!-- nahranie súborov -->
+  <section class="panel panel--model" id="mdPanel">
+    <div class="panel__head">
+      <span class="panel__tag">modely</span>
+      <span class="panel__title" id="mdTitle">nahrajte jeden alebo viac IFC</span>
+      <span class="panel__sub">.ifc · IFC2x3 · IFC4 · IFC4.3</span>
+    </div>
+    <div class="panel__body" id="mdBody"></div>
+  </section>
+
+  <!-- prehliadač -->
+  <section class="md" id="mdApp" hidden>
+    <div class="metastrip" id="mdChips"></div>
+    <div class="note note--bad md__err" id="mdErr" hidden></div>
+
+    <div class="vw__tools md__tools">
+      <div class="vw__search md__search">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+        <input id="mdQ" type="search" placeholder="hľadať názov, triedu, GlobalId, #ID…" autocomplete="off" spellcheck="false">
+        <span class="vw__hits" id="mdHits"></span>
+      </div>
+      <button class="toolbtn" id="mdAdd">+ pridať model</button>
+      <span class="md__sep"></span>
+      <button class="toolbtn" id="mdFit" title="Celý model (F)">celok</button>
+      <button class="toolbtn" id="mdIso" title="Axonometria">3D</button>
+      <button class="toolbtn" id="mdTop" title="Pôdorys — sever hore">zhora</button>
+      <span class="md__sep"></span>
+      <button class="toolbtn" id="mdColor" title="Každý model jednou farbou — na koordináciu">farba podľa modelu</button>
+      <button class="toolbtn" id="mdGhost" title="Priehľadné modely — vidno os a rez">priehľadne</button>
+      <button class="toolbtn" id="mdShowAll" disabled>zobraziť všetko</button>
+    </div>
+
+    <div class="md__main">
+      <aside class="md__left" id="mdLeft"></aside>
+      <div class="md__view" id="mdView">
+        <div class="md__busy" id="mdBusy" hidden><div class="spinner"></div><span class="md__busyT"></span></div>
+      </div>
+      <aside class="vw__side md__side" id="mdSide"></aside>
+    </div>
+  </section>
+
+  <!-- priečne rezy po trase -->
+  <section class="card sec" id="mdSec" hidden>
+    <div class="sec__bar">
+      <span class="sec__tag">rez</span>
+      <select id="secAl" title="trasa"></select>
+      <span class="sec__lbl">km</span>
+      <input id="secSt" class="sec__st" type="text" spellcheck="false" autocomplete="off" title="Staničenie — napr. 1,250.5 alebo 1+250.5 alebo metre 1250.5; potvrďte Enter">
+      <button class="iconbtn sec__ib" id="secSnapP" title="Predchádzajúce okrúhle staničenie">«</button>
+      <button class="iconbtn sec__ib" id="secPrev" title="O krok späť (PageUp)">‹</button>
+      <button class="iconbtn sec__ib" id="secNext" title="O krok vpred (PageDown)">›</button>
+      <button class="iconbtn sec__ib" id="secSnapN" title="Nasledujúce okrúhle staničenie">»</button>
+      <label class="sec__lbl">krok
+        <select id="secStep"><option>1</option><option>5</option><option>10</option><option selected>20</option><option>25</option><option>50</option><option>100</option></select> m</label>
+      <label class="sec__lbl">šírka
+        <select id="secWidth"><option value="0" selected>celá</option><option value="5">±5 m</option><option value="10">±10 m</option><option value="20">±20 m</option><option value="50">±50 m</option><option value="100">±100 m</option></select></label>
+      <label class="sec__lbl">3D
+        <select id="secClip"><option value="none" selected>bez orezu</option><option value="ahead">skryť pred rezom</option><option value="behind">skryť za rezom</option><option value="band">len pás ±5 m</option></select></label>
+      <button class="toolbtn" id="secLook" title="Kamera v osi trasy, pohľad v smere staničenia">pohľad do rezu</button>
+      <span class="md__gap"></span>
+      <button class="toolbtn" id="secSvg">rez do SVG ↓</button>
+      <button class="iconbtn sec__ib" id="secClose" title="Zavrieť rezy">×</button>
+    </div>
+    <input id="secRange" class="sec__range" type="range" min="0" max="1" step="0.001" value="0" title="Staničenie">
+    <div class="sec__main">
+      <div class="sec__wrap" id="secWrap">
+        <canvas id="secCanvas"></canvas>
+        <span class="sec__cur" id="secCursor"></span>
+        <button class="minibtn sec__fit" id="secFit" title="Celý rez (dvojklik)">celý rez</button>
+      </div>
+      <aside class="sec__info">
+        <div id="secInfo"></div>
+        <details class="sec__ser">
+          <summary>séria rezov do SVG</summary>
+          <div class="sec__serB">
+            <label>od km <input id="secFrom" type="text" spellcheck="false"></label>
+            <label>do km <input id="secTo" type="text" spellcheck="false"></label>
+            <label>každých <select id="secEvery"><option>5</option><option>10</option><option selected>20</option><option>25</option><option>50</option><option>100</option></select> m</label>
+            <label class="radio radio--flat"><input type="checkbox" id="secEnds" checked><span>pridať aj koncové staničenie</span></label>
+            <button class="btn btn--sm" id="secSer">exportovať sériu ↓</button>
+            <div class="help" id="secSerMsg">Rezy sa uložia do jedného SVG v spoločnej mierke, po dvoch vedľa seba.</div>
+          </div>
+        </details>
+      </aside>
+    </div>
+    <div class="sec__help"><b>Klávesy v 3D:</b> H skryť · I izolovať · F priblížiť · Esc zrušiť výber · PageUp / PageDown posun rezu o krok. Rez je zvislá rovina kolmá na os v danom staničení; pohľad v smere staničenia (vľavo / vpravo podľa smeru trasy), výšky v metroch. Koliesko približuje, ťahaním sa posúva, klik vyberie prvok.</div>
+  </section>
+
+</div>
+
 <footer class="sitefoot">
   <div class="sitefoot__inner">
     <span class="sitefoot__brand">mini-ifc/tools</span>
@@ -340,6 +467,7 @@
 <input type="file" id="fileB" accept=".ifc,.IFC" hidden>
 <input type="file" id="fileV" accept=".ifc,.IFC,.step,.stp" hidden>
 <input type="file" id="fileC" accept=".ifc,.IFC,.step,.stp" hidden>
+<input type="file" id="fileM" accept=".ifc,.IFC" multiple hidden>
 
 <!-- jadro zlúčenia — načítané aj tu, aby fungoval núdzový režim bez Web Workera -->
 <script src="js/ifc-merge.js"></script>
@@ -353,6 +481,9 @@
 <script src="js/viewer.js"></script>
 <!-- validácia — hĺbková časť sa dotiahne až na kliknutie (js/validate-pyodide.js) -->
 <script src="js/validate.js"></script>
+<!-- 3D prehliadač — trasa IFC 4.3 a samotný prehliadač (three.js a web-ifc sa dotiahnu až pri použití) -->
+<script src="js/ifc-alignment.js"></script>
+<script src="js/model.js"></script>
 <!-- prepínanie nástrojov -->
 <script src="js/nav.js"></script>
 </body>
