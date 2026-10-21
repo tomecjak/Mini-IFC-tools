@@ -85,7 +85,11 @@
       al: null,          // { m, a } aktívna trasa
       station: 0, step: 20, width: 0, clip: "none", band: 10,
       data: null,        // posledný vypočítaný rez
-      view: null         // { s, cu, cv } — mierka a stred 2D pohľadu
+      view: null,        // { s, cu, cv } — mierka a stred 2D pohľadu
+      mode: "cross",     // cross = priečny rez · long = pozdĺžny profil
+      exag: 10,          // prevýšenie výšok v profile
+      prof: null,        // vypočítaný pozdĺžny profil (zneplatní sa pri zmene viditeľnosti)
+      pview: null        // { sx, cs, cv } — mierka a stred profilu
     }
   };
 
@@ -413,6 +417,7 @@
       });
       m.alignments.forEach(function (a) { if (a.obj) a.obj.visible = m.visible && a.visible; });
     });
+    st.sec.prof = null;
     refreshSection();
     requestRender();
   }
@@ -762,6 +767,7 @@
   function refreshSection() {
     if (!st.sec.al || !three) return;
     st.sec.data = computeSection(st.sec.station);
+    if (st.sec.mode === "long" && !st.sec.prof) st.sec.prof = computeProfile();
     if (st.sec.clip !== "none") setClip();
     drawSection3D();
     drawSection();
@@ -782,6 +788,7 @@
 
   function openSection(m, a) {
     st.sec.al = { m: m, a: a };
+    st.sec.prof = null; st.sec.pview = null;
     var opts = $("secAl");
     opts.value = a.key;
     $("mdSec").hidden = false;
@@ -796,7 +803,7 @@
     requestAnimationFrame(sizeSecCanvas);
   }
   function closeSection() {
-    st.sec.al = null; st.sec.data = null;
+    st.sec.al = null; st.sec.data = null; st.sec.prof = null;
     $("mdSec").hidden = true;
     setClip();
     drawSection3D();
@@ -841,6 +848,7 @@
   function drawSection() {
     var ctx = sec2d.ctx, d = st.sec.data;
     if (!ctx || $("mdSec").hidden) return;
+    if (st.sec.mode === "long") { drawProfile(); return; }
     ctx.clearRect(0, 0, sec2d.w, sec2d.h);
     ctx.fillStyle = "#FCFCFA"; ctx.fillRect(0, 0, sec2d.w, sec2d.h);
     if (!d) return;
@@ -945,6 +953,7 @@
   function wireSecCanvas() {
     var cv = $("secCanvas"), drag = null;
     cv.addEventListener("wheel", function (e) {
+      if (st.sec.mode === "long") { e.preventDefault(); profWheel(e); return; }
       if (!st.sec.view) return;
       e.preventDefault();
       var r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, V = st.sec.view;
@@ -959,6 +968,7 @@
       cv.setPointerCapture(e.pointerId);
     });
     cv.addEventListener("pointermove", function (e) {
+      if (st.sec.mode === "long") { profMove(e, drag); return; }
       var r = cv.getBoundingClientRect(), V = st.sec.view;
       if (V) {
         var w = fromScr(V, e.clientX - r.left, e.clientY - r.top);
@@ -974,14 +984,18 @@
     });
     cv.addEventListener("pointerup", function (e) {
       var r = cv.getBoundingClientRect();
-      if (drag && !drag.moved) {
+      if (drag && !drag.moved && st.sec.mode === "long") profClick(e.clientX - r.left, e.clientY - r.top);
+      else if (drag && !drag.moved) {
         var it = secHit(e.clientX - r.left, e.clientY - r.top);
         if (it) select(it.m, it.id); else select(null);
       }
       drag = null;
     });
     cv.addEventListener("pointerleave", function () { $("secCursor").textContent = ""; });
-    cv.addEventListener("dblclick", function () { st.sec.view = null; drawSection(); });
+    cv.addEventListener("dblclick", function () {
+      if (st.sec.mode === "long") st.sec.pview = null; else st.sec.view = null;
+      drawSection();
+    });
   }
 
   function renderSecInfo() {
@@ -1002,11 +1016,457 @@
       ["výškový prvok", p.hasZ ? (Vt[p.vType] || p.vType.toLowerCase()) + (p.vRadius && p.vType !== "CONSTANTGRADIENT" ? " · R " + fmt(Math.abs(p.vRadius), 0) : "") : "—"]
     ];
     if (p.cant) rows.push(["prevýšenie Ľ / P", fmt(p.cant.left * 1000, 1) + " / " + fmt(p.cant.right * 1000, 1) + " mm"]);
-    rows.push(["prvky v reze", String(d.items.length)]);
+    if (st.sec.mode === "long") rows.push(["prvky v profile", String(st.sec.prof ? st.sec.prof.items.length : 0)]);
+    else rows.push(["prvky v reze", String(d.items.length)]);
     el.innerHTML = rows.map(function (r) {
       return '<div class="si"><span class="si__k">' + esc(r[0]) + '</span><span class="si__v">' + esc(r[1]) + '</span></div>';
     }).join("") +
+      (st.sec.mode === "long" ? verticalTable(a, p.dist) : "") +
       '<div class="si__note">' + esc(a.name || "trasa") + " · " + esc(st.sec.al.m.name) + "</div>";
+  }
+
+  // =========================================================================
+  //  Pozdĺžny profil
+  // =========================================================================
+  /* Prepnutie medzi priečnym rezom a pozdĺžnym profilom. */
+  function setMode(mode) {
+    st.sec.mode = mode;
+    var long = mode === "long";
+    $("secModeX").classList.toggle("is-on", !long);
+    $("secModeL").classList.toggle("is-on", long);
+    $("secWidthL").hidden = long;
+    $("secExagL").hidden = !long;
+    $("secSerBox").hidden = long;
+    $("secFit").textContent = long ? "celý profil" : "celý rez";
+    $("secCursor").style.bottom = long ? (BAND + 24) + "px" : "";
+    $("secSvg").textContent = long ? "profil do SVG ↓" : "rez do SVG ↓";
+    document.querySelector("#mdSec .sec__tag").textContent = long ? "profil" : "rez";
+    if (long && !st.sec.prof && st.sec.al) {
+      busySec(true);
+      setTimeout(function () { st.sec.prof = computeProfile(); busySec(false); drawSection(); renderSecInfo(); }, 20);
+      return;
+    }
+    drawSection();
+    renderSecInfo();
+  }
+  function busySec(on) {
+    var ctx = sec2d.ctx; if (!ctx || !on) return;
+    ctx.fillStyle = "rgba(252,252,250,.85)"; ctx.fillRect(0, 0, sec2d.w, sec2d.h);
+    ctx.fillStyle = "#5C5A52"; ctx.font = "12px 'IBM Plex Mono', monospace"; ctx.textAlign = "center";
+    ctx.fillText("počíta sa pozdĺžny profil…", sec2d.w / 2, sec2d.h / 2);
+  }
+
+  /* Prienik modelov s rozvinutou zvislou plochou pozdĺž osi trasy. Os sa zahustí
+     na krátke úsečky; každá je zvislá rovina obmedzená na svoj úsek, takže
+     susedné kúsky sa stretnú presne na zvislici cez bod osi a obrysy sa dajú
+     pospájať. Výsledok: x = staničenie, y = výška (m). */
+  function computeProfile() {
+    var A = st.sec.al; if (!A) return null;
+    var a = A.a, m0 = A.m;
+    var pts = a.sample(Math.max(0.5, Math.min(5, a.length / 1500)));
+    var W = pts.map(function (p) { return ifcToWorld(m0, p.x, p.y, p.z); });
+    var items = [], bb = [Infinity, Infinity, -Infinity, -Infinity];
+
+    st.models.forEach(function (m) {
+      if (!m.visible) return;
+      var inv = m.group.matrixWorld.clone().invert();
+      var L = W.map(function (w) { return w.clone().applyMatrix4(inv); });
+      var up = new Lib.T.Vector3(0, 1, 0).transformDirection(inv);
+      var ux = up.x, uy = up.y, uz = up.z;
+
+      // mriežka prvkov v pôdoryse — na úsek osi sa testujú len prvky z jeho buniek
+      var cell = Math.max(10, a.length / 300), grid = new Map(), big = [];
+      var prods = [];
+      m.products.forEach(function (p) { if (productShown(m, p)) prods.push(p); });
+      prods.forEach(function (p, idx) {
+        var i0 = Math.floor(p.bb[0] / cell), i1 = Math.floor(p.bb[3] / cell);
+        var k0 = Math.floor(p.bb[2] / cell), k1 = Math.floor(p.bb[5] / cell);
+        if ((i1 - i0 + 1) * (k1 - k0 + 1) > 400) { big.push(idx); return; }
+        for (var i = i0; i <= i1; i++) for (var k = k0; k <= k1; k++) {
+          var key2 = i + "," + k, l = grid.get(key2);
+          if (l) l.push(idx); else grid.set(key2, [idx]);
+        }
+      });
+      var segsOf = new Map(), stamp = new Int32Array(prods.length).fill(-1);
+
+      for (var si = 0; si < L.length - 1; si++) {
+        var A0 = L[si], A1 = L[si + 1];
+        var dx = A1.x - A0.x, dz = A1.z - A0.z, len = Math.hypot(dx, dz);
+        if (len < 1e-6) continue;
+        var tx = dx / len, tz = dz / len, nx = tz, nz = -tx;     // smer úseku a kolmica v pôdoryse
+        var st0 = pts[si].station, dSt = pts[si + 1].station - st0, z0 = pts[si].z;
+        var cand = big.slice();
+        var ia = Math.floor(Math.min(A0.x, A1.x) / cell), ib = Math.floor(Math.max(A0.x, A1.x) / cell);
+        var ka = Math.floor(Math.min(A0.z, A1.z) / cell), kb = Math.floor(Math.max(A0.z, A1.z) / cell);
+        for (var ci = ia; ci <= ib; ci++) for (var ck = ka; ck <= kb; ck++) {
+          var l2 = grid.get(ci + "," + ck); if (l2) for (var q = 0; q < l2.length; q++) cand.push(l2[q]);
+        }
+        for (var c = 0; c < cand.length; c++) {
+          var pi = cand[c];
+          if (stamp[pi] === si) continue;
+          stamp[pi] = si;
+          var p = prods[pi], b = p.bb;
+          // obal prvku musí pretínať rovinu a zasahovať do dĺžky úseku
+          var neg = false, pos = false, amin = Infinity, amax = -Infinity;
+          for (var cc = 0; cc < 4; cc++) {
+            var X = (cc & 1 ? b[3] : b[0]) - A0.x, Z = (cc & 2 ? b[5] : b[2]) - A0.z;
+            var dn = X * nx + Z * nz, da = X * tx + Z * tz;
+            if (dn < 0) neg = true; else pos = true;
+            if (da < amin) amin = da; if (da > amax) amax = da;
+          }
+          if (!(neg && pos) || amax < (si === 0 ? -0.5 : 0) || amin > len + (si === L.length - 2 ? 0.5 : 0)) continue;
+          var out = segsOf.get(p.id);
+          // krajné úseky siahajú kúsok za koniec trasy — teselácia telies končí
+          // o milimetre ďalej a ich čelá by inak vypadli (obrys by sa neuzavrel)
+          var lo = si === 0 ? -0.5 : 0, hi = si === L.length - 2 ? len + 0.5 : len;
+          cutProduct(p, A0, tx, tz, nx, nz, len, lo, hi, st0, dSt, z0, ux, uy, uz, function (x1, y1, x2, y2) {
+            if (!out) { out = []; segsOf.set(p.id, out); }
+            out.push(x1, y1, x2, y2);
+          });
+        }
+      }
+      segsOf.forEach(function (segs, id) {
+        var prod = m.products.get(id);
+        for (var i = 0; i < segs.length; i += 2) {
+          if (segs[i] < bb[0]) bb[0] = segs[i]; if (segs[i] > bb[2]) bb[2] = segs[i];
+          if (segs[i + 1] < bb[1]) bb[1] = segs[i + 1]; if (segs[i + 1] > bb[3]) bb[3] = segs[i + 1];
+        }
+        var ch = chain(segs);
+        // prvok, ktorý pokračuje za začiatok či koniec trasy, je na hranici profilu
+        // odrezaný — obrys s oboma koncami na tejto hranici sa uzavrie zvislou čiarou
+        var edgeA = a.startStation - 0.5, edgeB = a.endStation + 0.5;
+        var onEdge = function (x) { return Math.abs(x - edgeA) < 1e-4 || Math.abs(x - edgeB) < 1e-4; };
+        ch.open = ch.open.filter(function (Lp) {
+          if (Lp.length >= 6 && onEdge(Lp[0]) && onEdge(Lp[Lp.length - 2])) { ch.loops.push(Lp); return false; }
+          return true;
+        });
+        items.push({ m: m, id: id, cls: prod.cls, color: prod.color, segs: segs, loops: ch.loops, open: ch.open });
+      });
+    });
+
+    var nivel = a.hasVertical ? pts.map(function (p) { return [p.station, p.z]; }) : [];
+    var curv = pts.map(function (p) { return [p.station, p.radius ? 1 / p.radius : 0]; });
+    nivel.forEach(function (n) { if (n[1] < bb[1]) bb[1] = n[1]; if (n[1] > bb[3]) bb[3] = n[1]; });
+    return { items: items, bb: bb, nivel: nivel, curv: curv, a: a };
+  }
+
+  /* Prienik trojuholníkov jedného prvku so zvislou rovinou úseku osi. */
+  function cutProduct(prod, A0, tx, tz, nx, nz, len, lo, hi, st0, dSt, z0, ux, uy, uz, emit) {
+    var ax = A0.x, ay = A0.y, az = A0.z, k = dSt / len;
+    prod.parts.forEach(function (pt) {
+      var P = pt.ch.posA, I = pt.ch.idxA, end = pt.start + pt.count;
+      for (var i = pt.start; i < end; i += 3) {
+        var a = I[i] * 3, b = I[i + 1] * 3, c = I[i + 2] * 3;
+        var da = (P[a] - ax) * nx + (P[a + 2] - az) * nz;
+        var db = (P[b] - ax) * nx + (P[b + 2] - az) * nz;
+        var dc = (P[c] - ax) * nx + (P[c + 2] - az) * nz;
+        if ((da > 0 && db > 0 && dc > 0) || (da < 0 && db < 0 && dc < 0)) continue;
+        if (da === 0 && db === 0 && dc === 0) continue;
+        var q = [];
+        edge(a, da, b, db); edge(b, db, c, dc); edge(c, dc, a, da);
+        if (q.length < 6) continue;
+        // úsečka v rovine: s = vzdialenosť pozdĺž úseku, h = výška
+        var s1 = (q[0] - ax) * tx + (q[2] - az) * tz, s2 = (q[3] - ax) * tx + (q[5] - az) * tz;
+        var h1 = (q[0] - ax) * ux + (q[1] - ay) * uy + (q[2] - az) * uz + z0;
+        var h2 = (q[3] - ax) * ux + (q[4] - ay) * uy + (q[5] - az) * uz + z0;
+        // orezanie na dĺžku úseku — s toleranciou, aby čelá telies presne na
+        // začiatku a konci trasy nevypadli pre zaokrúhľovaciu chybu
+        var eps = 1e-6;
+        if ((s1 < lo - eps && s2 < lo - eps) || (s1 > hi + eps && s2 > hi + eps)) continue;
+        if (Math.abs(s2 - s1) <= eps) {
+          s1 = s2 = Math.max(lo, Math.min(hi, (s1 + s2) / 2));
+        } else {
+          var t0 = 0, t1 = 1, ds = s2 - s1;
+          var ta = (lo - s1) / ds, tb = (hi - s1) / ds;
+          t0 = Math.max(t0, Math.min(ta, tb)); t1 = Math.min(t1, Math.max(ta, tb));
+          if (t0 >= t1) continue;
+          var S1 = s1 + ds * t0, S2 = s1 + ds * t1, H1 = h1 + (h2 - h1) * t0, H2 = h1 + (h2 - h1) * t1;
+          s1 = S1; s2 = S2; h1 = H1; h2 = H2;
+        }
+        emit(st0 + s1 * k, h1, st0 + s2 * k, h2);
+      }
+      function edge(i1, d1, i2, d2) {
+        if (q.length >= 6) return;
+        if (d1 === 0) { q.push(P[i1], P[i1 + 1], P[i1 + 2]); return; }
+        if ((d1 < 0) === (d2 < 0) || d2 === 0) return;
+        var t = d1 / (d1 - d2);
+        q.push(P[i1] + (P[i2] - P[i1]) * t, P[i1 + 1] + (P[i2 + 1] - P[i1 + 1]) * t, P[i1 + 2] + (P[i2 + 2] - P[i1 + 2]) * t);
+      }
+    });
+  }
+
+  // ---- kreslenie profilu ----------------------------------------------------
+  var BAND = 34;   // výška pásu smerových pomerov pod profilom (px)
+  function profFit(pr) {
+    var a = pr.a, bb = pr.bb, ex = st.sec.exag;
+    var x0 = a.startStation, x1 = a.endStation;
+    var y0 = isFinite(bb[1]) ? bb[1] : 0, y1 = isFinite(bb[3]) ? bb[3] : 10;
+    if (y1 - y0 < 1) { y0 -= 1; y1 += 1; }
+    var H = sec2d.h - BAND - 46;
+    var sx = Math.min((sec2d.w - 80) / Math.max(x1 - x0, 1), H / ((y1 - y0) * ex));
+    return { sx: sx, cs: (x0 + x1) / 2, cv: (y0 + y1) / 2 };
+  }
+  function pX(V, x) { return 50 + (sec2d.w - 60) / 2 + (x - V.cs) * V.sx; }
+  function pY(V, y) { return 16 + (sec2d.h - BAND - 16) / 2 - (y - V.cv) * V.sx * st.sec.exag; }
+  function pInv(V, X, Y) {
+    return [(X - 50 - (sec2d.w - 60) / 2) / V.sx + V.cs, -(Y - 16 - (sec2d.h - BAND - 16) / 2) / (V.sx * st.sec.exag) + V.cv];
+  }
+  function stLabel(x, step) {
+    return AL.formatStation(x, step < 1 ? 1 : 0).replace(/\.0$/, "");
+  }
+
+  function drawProfile() {
+    var ctx = sec2d.ctx, pr = st.sec.prof, W = sec2d.w, H = sec2d.h;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#FCFCFA"; ctx.fillRect(0, 0, W, H);
+    if (!pr) return;
+    var V = st.sec.pview || (st.sec.pview = profFit(pr)), ex = st.sec.exag;
+    var plotB = H - BAND;
+
+    // mriežka: staničenia a výšky
+    var xs = niceStep(90 / V.sx), ys = niceStep(46 / (V.sx * ex));
+    var a0 = pInv(V, 0, plotB), a1 = pInv(V, W, 0);
+    ctx.lineWidth = 1; ctx.font = "10px 'IBM Plex Mono', monospace";
+    for (var x = Math.ceil(a0[0] / xs) * xs; x <= a1[0]; x += xs) {
+      var X = Math.round(pX(V, x)) + 0.5;
+      ctx.strokeStyle = "#ECEAE3"; ctx.beginPath(); ctx.moveTo(X, 0); ctx.lineTo(X, plotB); ctx.stroke();
+      ctx.fillStyle = "#98958A"; ctx.textAlign = "center";
+      ctx.fillText(stLabel(Math.round(x / xs) * xs, xs), X, plotB - 5);
+    }
+    for (var y = Math.ceil(a0[1] / ys) * ys; y <= a1[1]; y += ys) {
+      var Y = Math.round(pY(V, y)) + 0.5;
+      ctx.strokeStyle = "#ECEAE3"; ctx.beginPath(); ctx.moveTo(0, Y); ctx.lineTo(W, Y); ctx.stroke();
+      ctx.fillStyle = "#98958A"; ctx.textAlign = "left";
+      ctx.fillText(fmt(Math.round(y / ys) * ys || 0, ys < 1 ? 1 : 0), 6, Y - 3);
+    }
+    // začiatok a koniec trasy
+    var a = pr.a;
+    ctx.fillStyle = "rgba(237,235,228,.6)";
+    var xa = pX(V, a.startStation), xb = pX(V, a.endStation);
+    if (xa > 0) ctx.fillRect(0, 0, xa, plotB);
+    if (xb < W) ctx.fillRect(xb, 0, W - xb, plotB);
+
+    // prvky modelov
+    var sel = st.sel;
+    sec2d.paths = [];
+    pr.items.forEach(function (it) {
+      var isSel = sel && sel.m === it.m && sel.id === it.id;
+      var path = new Path2D();
+      it.loops.forEach(function (L) {
+        for (var i = 0; i < L.length; i += 2) {
+          var px = pX(V, L[i]), py = pY(V, L[i + 1]);
+          if (i === 0) path.moveTo(px, py); else path.lineTo(px, py);
+        }
+        path.closePath();
+      });
+      ctx.fillStyle = isSel ? "rgba(242,169,0,.55)" : itemColor(it, 0.38);
+      ctx.fill(path, "evenodd");
+      ctx.strokeStyle = isSel ? "#9C6A00" : strokeColor(it);
+      ctx.lineWidth = isSel ? 2 : 1;
+      ctx.stroke(path);
+      if (it.open.length) {
+        var op = new Path2D();
+        it.open.forEach(function (L) {
+          for (var i = 0; i < L.length; i += 2) {
+            var px = pX(V, L[i]), py = pY(V, L[i + 1]);
+            if (i === 0) op.moveTo(px, py); else op.lineTo(px, py);
+          }
+        });
+        ctx.stroke(op);
+      }
+      sec2d.paths.push({ it: it, path: path });
+    });
+
+    // niveleta, lomy sklonu a popisy prvkov
+    if (pr.nivel.length) {
+      ctx.strokeStyle = "#D0216A"; ctx.lineWidth = 1.6; ctx.beginPath();
+      pr.nivel.forEach(function (n, i) { var px = pX(V, n[0]), py = pY(V, n[1]); if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); });
+      ctx.stroke();
+      ctx.lineWidth = 1;
+      a.vertical.forEach(function (sg, i) {
+        var s0 = a.startStation + sg.start, s1 = s0 + sg.length;
+        var z0 = a.pointAt(sg.start).z, x0 = pX(V, s0), x1 = pX(V, s1);
+        // hranica prvku
+        ctx.fillStyle = "#D0216A";
+        ctx.beginPath(); ctx.arc(x0, pY(V, z0), 2.5, 0, Math.PI * 2); ctx.fill();
+        if (i === a.vertical.length - 1) { ctx.beginPath(); ctx.arc(x1, pY(V, a.pointAt(sg.start + sg.length).z), 2.5, 0, Math.PI * 2); ctx.fill(); }
+        if (x1 - x0 < 70 || x1 < 0 || x0 > W) return;
+        var mid = sg.start + sg.length / 2, zm = a.pointAt(mid).z;
+        var label = sg.type === "CONSTANTGRADIENT" ? fmt(sg.g0 * 100, 2) + " %" :
+          "R " + fmt(Math.abs(sg.r || 0), 0) + (sg.type === "PARABOLICARC" ? " (par.)" : "");
+        ctx.font = "600 10px 'IBM Plex Mono', monospace"; ctx.textAlign = "center";
+        ctx.fillStyle = sg.type === "CONSTANTGRADIENT" ? "#A01B55" : "#4B3F8F";
+        ctx.fillText(label, pX(V, a.startStation + mid), pY(V, zm) - 8);
+      });
+    } else {
+      ctx.fillStyle = "#8A5A00"; ctx.font = "11px 'IBM Plex Sans', sans-serif"; ctx.textAlign = "left";
+      ctx.fillText("Trasa nemá výškové vedenie (IfcAlignmentVertical) — zobrazujú sa len prieniky modelov.", 60, 34);
+    }
+
+    // aktuálne staničenie priečneho rezu
+    var cx = Math.round(pX(V, st.sec.station)) + 0.5;
+    ctx.strokeStyle = "#4B3F8F"; ctx.lineWidth = 1; ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, plotB); ctx.stroke(); ctx.setLineDash([]);
+    ctx.font = "600 10px 'IBM Plex Mono', monospace"; ctx.textAlign = "center";
+    var tag = "km " + AL.formatStation(st.sec.station, 2), tw = ctx.measureText(tag).width + 10;
+    ctx.fillStyle = "#4B3F8F"; ctx.fillRect(cx - tw / 2, 2, tw, 15);
+    ctx.fillStyle = "#fff"; ctx.fillText(tag, cx, 13);
+
+    // pás smerových pomerov — krivosť (doľava hore, doprava dole)
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, plotB, W, BAND);
+    ctx.strokeStyle = "#D3CFC4"; ctx.beginPath(); ctx.moveTo(0, plotB + 0.5); ctx.lineTo(W, plotB + 0.5); ctx.stroke();
+    var mid0 = plotB + BAND / 2, kmax = 0;
+    pr.curv.forEach(function (c) { kmax = Math.max(kmax, Math.abs(c[1])); });
+    ctx.strokeStyle = "#ECEAE3"; ctx.beginPath(); ctx.moveTo(0, mid0 + 0.5); ctx.lineTo(W, mid0 + 0.5); ctx.stroke();
+    if (kmax > 0) {
+      ctx.strokeStyle = "#4B3F8F"; ctx.lineWidth = 1.3; ctx.beginPath();
+      pr.curv.forEach(function (c, i) {
+        var px = pX(V, c[0]), py = mid0 - c[1] / kmax * (BAND / 2 - 5);
+        if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+      });
+      ctx.stroke(); ctx.lineWidth = 1;
+    }
+    ctx.fillStyle = "#98958A"; ctx.font = "9.5px 'IBM Plex Mono', monospace"; ctx.textAlign = "left";
+    ctx.fillText("smerové pomery · ▲ vľavo  ▼ vpravo", 6, plotB + 11);
+    ctx.textAlign = "right";
+    ctx.fillText("prevýšenie " + ex + "×", W - 8, plotB + 11);
+  }
+
+  function profHit(x, y) {
+    var ctx = sec2d.ctx, sx = sec2d.cv.width / sec2d.w, sy = sec2d.cv.height / sec2d.h;
+    for (var i = sec2d.paths.length - 1; i >= 0; i--) {
+      if (ctx.isPointInPath(sec2d.paths[i].path, x * sx, y * sy, "evenodd")) return sec2d.paths[i].it;
+    }
+    return null;
+  }
+  function profClick(x, y) {
+    var V = st.sec.pview; if (!V || !st.sec.prof) return;
+    if (y < sec2d.h - BAND) {
+      var it = profHit(x, y);
+      if (it) select(it.m, it.id);
+    }
+    setStation(pInv(V, x, y)[0], { keepView: true });
+  }
+  function profWheel(e) {
+    var V = st.sec.pview; if (!V) return;
+    var r = sec2d.cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    var b = pInv(V, x, y);
+    V.sx *= Math.pow(1.0015, -e.deltaY);
+    var c = pInv(V, x, y);
+    V.cs += b[0] - c[0]; V.cv += b[1] - c[1];
+    drawSection();
+  }
+  function profMove(e, drag) {
+    var V = st.sec.pview; if (!V) return;
+    var r = sec2d.cv.getBoundingClientRect(), w = pInv(V, e.clientX - r.left, e.clientY - r.top);
+    var a = st.sec.al && st.sec.al.a, z = "";
+    if (a && a.hasVertical && w[0] >= a.startStation && w[0] <= a.endStation) z = " · niveleta " + fmt(a.atStation(w[0]).z, 3) + " m";
+    $("secCursor").textContent = "km " + AL.formatStation(w[0], 2) + " · výška " + fmt(w[1], 3) + " m" + z;
+    if (!drag) return;
+    var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    if (!drag.moved) return;
+    V.cs -= dx / V.sx; V.cv += dy / (V.sx * st.sec.exag);
+    drag.x = e.clientX; drag.y = e.clientY;
+    drawSection();
+  }
+
+  /* Tabuľka výškových prvkov (lomy nivelety) pre bočný panel profilu. */
+  function verticalTable(a, dist) {
+    if (!a.vertical.length) return '<div class="vt__h">výškové prvky</div><div class="dt__none">trasa nemá výškové vedenie</div>';
+    var T = { CONSTANTGRADIENT: "sklon", PARABOLICARC: "parab.", CIRCULARARC: "oblúk", CLOTHOID: "klotoida" };
+    var rows = a.vertical.map(function (sg) {
+      var cur = dist >= sg.start - 1e-9 && dist <= sg.start + sg.length + 1e-9;
+      var val = sg.type === "CONSTANTGRADIENT" ? fmt(sg.g0 * 100, 2) + " %" : "R " + fmt(Math.abs(sg.r || 0), 0);
+      return "<tr" + (cur ? ' class="is-cur"' : "") + "><td>" + AL.formatStation(a.startStation + sg.start, 2) +
+        "</td><td>" + (T[sg.type] || sg.type.toLowerCase()) + '</td><td class="r">' + val +
+        '</td><td class="r">' + fmt(a.pointAt(sg.start).z, 3) + "</td></tr>";
+    }).join("");
+    return '<div class="vt__h">výškové prvky</div><table class="vt"><tr><th>začiatok km</th><th>prvok</th><th class="r">sklon / R</th><th class="r">výška</th></tr>' + rows + "</table>";
+  }
+
+  // ---- export profilu do SVG ------------------------------------------------
+  var H_SCALES = [200, 250, 500, 1000, 2000, 2500, 5000, 10000, 20000, 25000, 50000];
+  function exportProfile() {
+    var pr = st.sec.prof; if (!pr) return;
+    var a = pr.a, ex = st.sec.exag;
+    var len = a.endStation - a.startStation;
+    // vodorovná mierka tak, aby sa profil zmestil do ~1 200 mm
+    var hs = H_SCALES.filter(function (s) { return len * 1000 / s <= 1200; })[0] || 100000;
+    var k = 1000 / hs, kv = k * ex;              // mm na 1 m vodorovne / zvisle
+    var y0 = isFinite(pr.bb[1]) ? pr.bb[1] : 0, y1 = isFinite(pr.bb[3]) ? pr.bb[3] : 10;
+    var gs = niceStep(8 / kv);
+    y0 = Math.floor(y0 / gs) * gs - gs; y1 = Math.ceil(y1 / gs) * gs + gs;
+    var L = 22, PW = len * k, PH = (y1 - y0) * kv, top = 24, band = 14;
+    var Wd = L + PW + 12, Hd = top + PH + band + 18;
+    var X = function (x) { return L + (x - a.startStation) * k; };
+    var Y = function (y) { return top + (y1 - y) * kv; };
+    var o = [];
+    o.push('<svg xmlns="http://www.w3.org/2000/svg" width="' + Wd.toFixed(1) + 'mm" height="' + Hd.toFixed(1) + 'mm" viewBox="0 0 ' + Wd.toFixed(1) + " " + Hd.toFixed(1) + '" font-family="IBM Plex Mono, monospace">');
+    o.push('<rect width="100%" height="100%" fill="#fff"/>');
+    o.push('<text x="' + L + '" y="10" font-size="4.2" font-weight="600">Pozdĺžny profil — ' + esc(a.name || "trasa") + "</text>");
+    o.push('<text x="' + L + '" y="16" font-size="2.8" fill="#5C5A52">M 1:' + hs + " / 1:" + Math.round(hs / ex) + " (prevýšenie " + ex + "×) · km " +
+      AL.formatStation(a.startStation, 3) + " – " + AL.formatStation(a.endStation, 3) + " · výšky v m · mini-ifc/tools</text>");
+    o.push('<rect x="' + L + '" y="' + top + '" width="' + PW.toFixed(2) + '" height="' + PH.toFixed(2) + '" fill="none" stroke="#D3CFC4" stroke-width="0.25"/>');
+    var xs = niceStep(14 / k);
+    for (var x = Math.ceil(a.startStation / xs) * xs; x <= a.endStation + 1e-9; x += xs) {
+      o.push('<line x1="' + X(x).toFixed(2) + '" y1="' + top + '" x2="' + X(x).toFixed(2) + '" y2="' + (top + PH).toFixed(2) + '" stroke="#ECEAE3" stroke-width="0.15"/>');
+      o.push('<text x="' + X(x).toFixed(2) + '" y="' + (top + PH + band + 4).toFixed(2) + '" font-size="2" fill="#5C5A52" text-anchor="middle">' + stLabel(Math.round(x / xs) * xs, xs) + "</text>");
+    }
+    for (var y = y0; y <= y1 + 1e-9; y += gs) {
+      o.push('<line x1="' + L + '" y1="' + Y(y).toFixed(2) + '" x2="' + (L + PW).toFixed(2) + '" y2="' + Y(y).toFixed(2) + '" stroke="#ECEAE3" stroke-width="0.15"/>');
+      o.push('<text x="' + (L - 1.5) + '" y="' + (Y(y) + 0.7).toFixed(2) + '" font-size="2" fill="#98958A" text-anchor="end">' + fmt(Math.round(y / gs) * gs || 0, gs < 1 ? 1 : 0) + "</text>");
+    }
+    o.push('<clipPath id="pc"><rect x="' + L + '" y="' + top + '" width="' + PW.toFixed(2) + '" height="' + PH.toFixed(2) + '"/></clipPath><g clip-path="url(#pc)">');
+    pr.items.forEach(function (it) {
+      var dd = "", od = "";
+      it.loops.forEach(function (Lp) {
+        for (var j = 0; j < Lp.length; j += 2) dd += (j ? "L" : "M") + X(Lp[j]).toFixed(2) + " " + Y(Lp[j + 1]).toFixed(2);
+        dd += "Z";
+      });
+      it.open.forEach(function (Lp) {
+        for (var j = 0; j < Lp.length; j += 2) od += (j ? "L" : "M") + X(Lp[j]).toFixed(2) + " " + Y(Lp[j + 1]).toFixed(2);
+      });
+      if (dd) o.push('<path d="' + dd + '" fill="' + itemColor(it, 0.38) + '" fill-rule="evenodd" stroke="' + strokeColor(it) + '" stroke-width="0.15"><title>' + esc(prettyCls(it.cls) + " #" + it.id) + "</title></path>");
+      if (od) o.push('<path d="' + od + '" fill="none" stroke="' + strokeColor(it) + '" stroke-width="0.15"/>');
+    });
+    if (pr.nivel.length) {
+      o.push('<path d="' + pr.nivel.map(function (n, i) { return (i ? "L" : "M") + X(n[0]).toFixed(2) + " " + Y(n[1]).toFixed(2); }).join("") +
+        '" fill="none" stroke="#D0216A" stroke-width="0.35"/>');
+      a.vertical.forEach(function (sg, i) {
+        var z = a.pointAt(sg.start).z, xx = X(a.startStation + sg.start);
+        o.push('<circle cx="' + xx.toFixed(2) + '" cy="' + Y(z).toFixed(2) + '" r="0.5" fill="#D0216A"/>');
+        o.push('<text transform="translate(' + (xx - 0.6).toFixed(2) + " " + (Y(z) - 2).toFixed(2) + ') rotate(-90)" font-size="1.8" fill="#A01B55">' +
+          "km " + AL.formatStation(a.startStation + sg.start, 2) + " · " + fmt(z, 3) + "</text>");
+        if (sg.length * k > 14) {
+          var mid = sg.start + sg.length / 2;
+          o.push('<text x="' + X(a.startStation + mid).toFixed(2) + '" y="' + (Y(a.pointAt(mid).z) - 1.5).toFixed(2) + '" font-size="2.2" text-anchor="middle" fill="' +
+            (sg.type === "CONSTANTGRADIENT" ? "#A01B55" : "#4B3F8F") + '">' +
+            (sg.type === "CONSTANTGRADIENT" ? fmt(sg.g0 * 100, 2) + " %" : "R " + fmt(Math.abs(sg.r || 0), 0)) + "</text>");
+        }
+        if (i === a.vertical.length - 1) {
+          var ze = a.pointAt(sg.start + sg.length).z;
+          o.push('<circle cx="' + X(a.startStation + sg.start + sg.length).toFixed(2) + '" cy="' + Y(ze).toFixed(2) + '" r="0.5" fill="#D0216A"/>');
+        }
+      });
+    }
+    o.push("</g>");
+    // pás smerových pomerov
+    var by = top + PH, kmax = 0;
+    pr.curv.forEach(function (c) { kmax = Math.max(kmax, Math.abs(c[1])); });
+    o.push('<rect x="' + L + '" y="' + by.toFixed(2) + '" width="' + PW.toFixed(2) + '" height="' + band + '" fill="none" stroke="#D3CFC4" stroke-width="0.25"/>');
+    o.push('<line x1="' + L + '" y1="' + (by + band / 2).toFixed(2) + '" x2="' + (L + PW).toFixed(2) + '" y2="' + (by + band / 2).toFixed(2) + '" stroke="#ECEAE3" stroke-width="0.15"/>');
+    if (kmax > 0) o.push('<path d="' + pr.curv.map(function (c, i) {
+      return (i ? "L" : "M") + X(c[0]).toFixed(2) + " " + (by + band / 2 - c[1] / kmax * (band / 2 - 2)).toFixed(2);
+    }).join("") + '" fill="none" stroke="#4B3F8F" stroke-width="0.25"/>');
+    o.push('<text x="' + (L - 1.5) + '" y="' + (by + band / 2 + 0.7).toFixed(2) + '" font-size="1.8" fill="#98958A" text-anchor="end">smer</text>');
+    a.horizontal.forEach(function (h) {
+      if (h.length * k < 12 || h.type === "LINE") return;
+      var R = h.type === "CIRCULARARC" ? "R " + fmt(Math.abs(h.r0), 0) : h.type.toLowerCase().replace("curve", "");
+      o.push('<text x="' + X(a.startStation + h.start + h.length / 2).toFixed(2) + '" y="' + (by + band - 1.2).toFixed(2) + '" font-size="1.8" fill="#4B3F8F" text-anchor="middle">' + esc(R) + "</text>");
+    });
+    o.push("</svg>");
+    download("profil_" + safeName(a.name) + ".svg", o.join("\n"), "image/svg+xml");
   }
 
   // ---- export rezov do SVG -------------------------------------------------
@@ -1583,9 +2043,19 @@
     $("secClip").addEventListener("change", function () { st.sec.clip = this.value; setClip(); requestRender(); });
     $("secLook").addEventListener("click", lookAtSection);
     $("secClose").addEventListener("click", closeSection);
-    $("secSvg").addEventListener("click", exportCurrent);
+    $("secSvg").addEventListener("click", function () { if (st.sec.mode === "long") exportProfile(); else exportCurrent(); });
+    $("secModeX").addEventListener("click", function () { setMode("cross"); });
+    $("secModeL").addEventListener("click", function () { setMode("long"); });
+    $("secExag").addEventListener("change", function () {
+      st.sec.exag = +this.value || 10;
+      // pri zmene prevýšenia zostane stred aj vodorovná mierka
+      drawSection();
+    });
     $("secSer").addEventListener("click", exportSeries);
-    $("secFit").addEventListener("click", function () { st.sec.view = null; drawSection(); });
+    $("secFit").addEventListener("click", function () {
+      if (st.sec.mode === "long") st.sec.pview = null; else st.sec.view = null;
+      drawSection();
+    });
     wireSecCanvas();
     new ResizeObserver(function () { if (!$("mdSec").hidden) sizeSecCanvas(); }).observe($("secWrap"));
   }
@@ -1630,7 +2100,7 @@
         clearHilite();
       }
       st.models = []; st.origin = null; st.sel = null; st.hidden = new Set(); st.isolate = null;
-      st.sec.al = null; st.sec.data = null; st.sec.view = null;
+      st.sec.al = null; st.sec.data = null; st.sec.view = null; st.sec.prof = null; st.sec.pview = null;
       if (three) { three.clip = []; drawSection3D(); }
       $("mdApp").hidden = true; $("mdSec").hidden = true;
       renderDrop();

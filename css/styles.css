@@ -883,6 +883,18 @@ details.pop.is-on > summary{background:var(--secondary);border-color:var(--secon
 .sec__bar select,.sec__serB select{width:auto}
 #secAl{max-width:260px}
 #view-model input[type=checkbox]:checked{background:var(--model);border-color:var(--model)}
+.seg{display:inline-flex;border:1px solid var(--model-line)}
+.seg__b{font-family:var(--mono);font-size:11px;color:var(--model);background:var(--surface);border:none;
+  padding:4px 9px;cursor:pointer;white-space:nowrap}
+.seg__b + .seg__b{border-left:1px solid var(--model-line)}
+.seg__b:hover{background:var(--model-tint)}
+.seg__b.is-on{background:var(--model);color:#fff;font-weight:600}
+.vt{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10.5px;margin-top:4px}
+.vt th{font-weight:500;color:var(--faint);text-align:left;padding:3px 4px;border-bottom:1px solid var(--line)}
+.vt td{padding:3px 4px;border-bottom:1px dotted var(--line);white-space:nowrap}
+.vt td.r,.vt th.r{text-align:right}
+.vt tr.is-cur td{background:var(--model-tint)}
+.vt__h{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:14px 0 2px}
 .sec__lbl{font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;align-items:center;gap:5px}
 .sec__st{font-family:var(--mono);font-size:13px;font-weight:600;width:118px;border:1px solid var(--ink);padding:4px 6px;outline:none}
 .sec__st.is-bad{border-color:var(--danger);color:var(--danger)}

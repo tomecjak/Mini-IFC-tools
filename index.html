@@ -409,6 +409,9 @@
     <div class="sec__bar">
       <span class="sec__tag">rez</span>
       <select id="secAl" title="trasa"></select>
+      <span class="seg" role="group" aria-label="zobrazenie">
+        <button class="seg__b is-on" id="secModeX" title="Priečny rez v staničení">priečny rez</button><button class="seg__b" id="secModeL" title="Pozdĺžny profil celej trasy — niveleta a prienik modelov s plochou pozdĺž osi">pozdĺžny profil</button>
+      </span>
       <span class="sec__lbl">km</span>
       <input id="secSt" class="sec__st" type="text" spellcheck="false" autocomplete="off" title="Staničenie — napr. 1,250.5 alebo 1+250.5 alebo metre 1250.5; potvrďte Enter">
       <button class="iconbtn sec__ib" id="secSnapP" title="Predchádzajúce okrúhle staničenie">«</button>
@@ -417,8 +420,10 @@
       <button class="iconbtn sec__ib" id="secSnapN" title="Nasledujúce okrúhle staničenie">»</button>
       <label class="sec__lbl">krok
         <select id="secStep"><option>1</option><option>5</option><option>10</option><option selected>20</option><option>25</option><option>50</option><option>100</option></select> m</label>
-      <label class="sec__lbl">šírka
+      <label class="sec__lbl" id="secWidthL">šírka
         <select id="secWidth"><option value="0" selected>celá</option><option value="5">±5 m</option><option value="10">±10 m</option><option value="20">±20 m</option><option value="50">±50 m</option><option value="100">±100 m</option></select></label>
+      <label class="sec__lbl" id="secExagL" hidden title="Koľkokrát sa výšky zväčšia oproti dĺžkam">prevýšenie
+        <select id="secExag"><option>1</option><option>2</option><option>5</option><option selected>10</option><option>20</option><option>50</option></select>×</label>
       <label class="sec__lbl">3D
         <select id="secClip"><option value="none" selected>bez orezu</option><option value="ahead">skryť pred rezom</option><option value="behind">skryť za rezom</option><option value="band">len pás ±5 m</option></select></label>
       <button class="toolbtn" id="secLook" title="Kamera v osi trasy, pohľad v smere staničenia">pohľad do rezu</button>
@@ -435,7 +440,7 @@
       </div>
       <aside class="sec__info">
         <div id="secInfo"></div>
-        <details class="sec__ser">
+        <details class="sec__ser" id="secSerBox">
           <summary>séria rezov do SVG</summary>
           <div class="sec__serB">
             <label>od km <input id="secFrom" type="text" spellcheck="false"></label>
@@ -448,7 +453,7 @@
         </details>
       </aside>
     </div>
-    <div class="sec__help"><b>Klávesy v 3D:</b> H skryť · I izolovať · F priblížiť · Esc zrušiť výber · PageUp / PageDown posun rezu o krok. Rez je zvislá rovina kolmá na os v danom staničení; pohľad v smere staničenia (vľavo / vpravo podľa smeru trasy), výšky v metroch. Koliesko približuje, ťahaním sa posúva, klik vyberie prvok.</div>
+    <div class="sec__help"><b>Klávesy v 3D:</b> H skryť · I izolovať · F priblížiť · Esc zrušiť výber · PageUp / PageDown posun rezu o krok. Pozdĺžny profil je rozvinutá zvislá plocha pozdĺž osi trasy — kliknutím v ňom sa nastaví staničenie priečneho rezu. Rez je zvislá rovina kolmá na os v danom staničení; pohľad v smere staničenia (vľavo / vpravo podľa smeru trasy), výšky v metroch. Koliesko približuje, ťahaním sa posúva, klik vyberie prvok.</div>
   </section>
 
 </div>
