@@ -138,7 +138,7 @@
           <li>viac modelov naraz, farba podľa modelu</li>
           <li>triedy, skrytie, izolácia, vlastnosti</li>
           <li>trasa IFC 4.3 a staničenie</li>
-          <li>priečne rezy + export série do SVG</li>
+          <li>priečne rezy, pozdĺžny profil, export do DXF</li>
         </ul>
       </div>
       <span class="tool__go">otvoriť model <span class="tool__arr">→</span></span>
@@ -428,7 +428,7 @@
         <select id="secClip"><option value="none" selected>bez orezu</option><option value="ahead">skryť pred rezom</option><option value="behind">skryť za rezom</option><option value="band">len pás ±5 m</option></select></label>
       <button class="toolbtn" id="secLook" title="Kamera v osi trasy, pohľad v smere staničenia">pohľad do rezu</button>
       <span class="md__gap"></span>
-      <button class="toolbtn" id="secSvg">rez do SVG ↓</button>
+      <button class="toolbtn" id="secSvg" title="Výkres v metroch 1 : 1, hladina pre každú triedu IFC">rez do DXF ↓</button>
       <button class="iconbtn sec__ib" id="secClose" title="Zavrieť rezy">×</button>
     </div>
     <input id="secRange" class="sec__range" type="range" min="0" max="1" step="0.001" value="0" title="Staničenie">
@@ -441,14 +441,14 @@
       <aside class="sec__info">
         <div id="secInfo"></div>
         <details class="sec__ser" id="secSerBox">
-          <summary>séria rezov do SVG</summary>
+          <summary>séria rezov do DXF</summary>
           <div class="sec__serB">
             <label>od km <input id="secFrom" type="text" spellcheck="false"></label>
             <label>do km <input id="secTo" type="text" spellcheck="false"></label>
             <label>každých <select id="secEvery"><option>5</option><option>10</option><option selected>20</option><option>25</option><option>50</option><option>100</option></select> m</label>
             <label class="radio radio--flat"><input type="checkbox" id="secEnds" checked><span>pridať aj koncové staničenie</span></label>
             <button class="btn btn--sm" id="secSer">exportovať sériu ↓</button>
-            <div class="help" id="secSerMsg">Rezy sa uložia do jedného SVG v spoločnej mierke, po dvoch vedľa seba.</div>
+            <div class="help" id="secSerMsg">Rezy sa uložia do jedného DXF (metre 1 : 1), po dvoch vedľa seba, každý vo vlastnom ráme s popisom výšok.</div>
           </div>
         </details>
       </aside>
