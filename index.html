@@ -139,6 +139,7 @@
           <li>triedy, skrytie, izolácia, vlastnosti</li>
           <li>trasa IFC 4.3 a staničenie</li>
           <li>priečne rezy, pozdĺžny profil, export do DXF</li>
+          <li>terén a ortofotomapa ČÚZK / ZBGIS</li>
         </ul>
       </div>
       <span class="tool__go">otvoriť model <span class="tool__arr">→</span></span>
@@ -392,6 +393,10 @@
       <span class="md__sep"></span>
       <button class="toolbtn" id="mdColor" title="Každý model jednou farbou — na koordináciu">farba podľa modelu</button>
       <button class="toolbtn" id="mdGhost" title="Priehľadné modely — vidno os a rez">priehľadne</button>
+      <details class="pop md-geo" id="mdGeo">
+        <summary id="mdGeoBtn" title="Terén, ortofotomapa a mapa pod modelom (ČÚZK, ZBGIS)">terén a mapa</summary>
+        <div class="pop__body md-geo__body" id="mdGeoBody"></div>
+      </details>
       <button class="toolbtn" id="mdShowAll" disabled>zobraziť všetko</button>
       <button class="toolbtn is-on" id="mdSideBtn" title="Zobraziť / skryť panel vlastností (P)">vlastnosti</button>
     </div>
@@ -492,6 +497,7 @@
 <script src="js/validate.js"></script>
 <!-- 3D prehliadač — trasa IFC 4.3 a samotný prehliadač (three.js a web-ifc sa dotiahnu až pri použití) -->
 <script src="js/ifc-alignment.js"></script>
+<script src="js/ifc-geo.js"></script>
 <script src="js/model.js"></script>
 <!-- prepínanie nástrojov -->
 <script src="js/nav.js"></script>

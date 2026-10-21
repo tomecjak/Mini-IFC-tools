@@ -84,6 +84,13 @@
     colorMode: "file",   // file | model
     ghost: false,
     sideOpen: readPref("md.side", "1") === "1",   // panel vlastností
+    geo: {
+      georef: null,      // súradnice projektu ↔ mapa (js/ifc-geo.js)
+      manual: false,     // georeferencovanie zadané ručne — nové modely ho neprepíšu
+      note: "",          // odkiaľ sa poloha zistila
+      opt: { base: "ortofoto", terrain: "dem", margin: 250, opacity: 1, country: "auto" },
+      mesh: null, model: null, busy: false, status: "", attr: ""
+    },
     busy: false,
     sec: {
       al: null,          // { m, a } aktívna trasa
@@ -209,10 +216,15 @@
     if (!e) return null;
     var v = function (x) { return x == null ? 0 : +(x.value !== undefined ? x.value : x._representationValue) || 0; };
     var crs = R.line(e.TargetCRS && e.TargetCRS.value);
+    // posuny sú v jednotkách mapy (MapUnit), bez nej v jednotkách projektu
+    var f = AL ? AL.units(R).length : 1, mu = crs && crs.MapUnit ? R.line(crs.MapUnit.value) : null;
+    if (mu && mu.Prefix !== undefined) f = { MILLI: 1e-3, CENTI: 1e-2, DECI: 0.1, KILO: 1e3 }[v(mu.Prefix) || ""] || 1;
+    var nm = function (x) { return x && x.value != null ? String(x.value) : ""; };
     return {
-      e: v(e.Eastings), n: v(e.Northings), h: v(e.OrthogonalHeight),
+      e: v(e.Eastings) * f, n: v(e.Northings) * f, h: v(e.OrthogonalHeight) * f,
       ax: e.XAxisAbscissa ? v(e.XAxisAbscissa) : 1, ay: e.XAxisOrdinate ? v(e.XAxisOrdinate) : 0,
-      crs: crs && crs.Name ? String(crs.Name.value || "") : ""
+      scale: e.Scale ? v(e.Scale) || 1 : 1,
+      crs: crs ? nm(crs.Name) : "", crsDesc: crs ? nm(crs.Description) + " " + nm(crs.GeodeticDatum) : ""
     };
   }
 
@@ -445,6 +457,14 @@
       three.hilite.material.clippingPlanes = three.clip.length ? three.clip : null;
       three.hilite.material.needsUpdate = true;
     }
+    if (st.geo.mesh) {
+      var gm = st.geo.mesh.material;
+      gm.clippingPlanes = three.clip.length ? three.clip : null;
+      gm.opacity = st.geo.opt.opacity;
+      gm.transparent = st.geo.opt.opacity < 1;
+      gm.depthWrite = st.geo.opt.opacity >= 1;
+      gm.needsUpdate = true;
+    }
     requestRender();
   }
 
@@ -596,10 +616,15 @@
 
   /* Prienik viditeľných prvkov všetkých modelov s rovinou rezu.
      Výsledok v 2D: u = odsun od osi (+ vpravo v smere staničenia), v = výška (m). */
+  /* Modely, ktoré sa režú — načítané IFC a k nim terén (ak je zobrazený). */
+  function cutModels() {
+    return st.geo.model && st.geo.mesh && st.geo.mesh.visible ? st.models.concat([st.geo.model]) : st.models;
+  }
+
   function computeSection(stn) {
     var F = sectionFrame(stn), items = [];
     var halfW = st.sec.width > 0 ? st.sec.width : Infinity;
-    st.models.forEach(function (m) {
+    cutModels().forEach(function (m) {
       if (!m.visible) return;
       var inv = m.group.matrixWorld.clone().invert();
       var P = F.P.clone().applyMatrix4(inv);
@@ -657,6 +682,27 @@
         items.push({ m: m, id: prod.id, cls: prod.cls, color: prod.color, segs: segs, loops: ch.loops, open: ch.open });
       });
     });
+    // terén siaha ďaleko do strán — v reze sa oreže na šírku modelov s presahom
+    var ter = items.filter(function (it) { return it.m.isTerrain; });
+    if (ter.length && halfW === Infinity) {
+      var lo = Infinity, hi = -Infinity;
+      items.forEach(function (it) {
+        if (it.m.isTerrain) return;
+        for (var i = 0; i < it.segs.length; i += 2) { lo = Math.min(lo, it.segs[i]); hi = Math.max(hi, it.segs[i]); }
+      });
+      if (!isFinite(lo)) { lo = 0; hi = 0; }
+      var pad = Math.max(20, (hi - lo) / 2);
+      lo -= pad; hi += pad;
+      ter.forEach(function (it) {
+        var keep = [];
+        for (var i = 0; i < it.segs.length; i += 4) {
+          if (Math.max(it.segs[i], it.segs[i + 2]) >= lo && Math.min(it.segs[i], it.segs[i + 2]) <= hi) keep.push(it.segs[i], it.segs[i + 1], it.segs[i + 2], it.segs[i + 3]);
+        }
+        it.segs = keep;
+        var c = chain(keep); it.loops = []; it.open = c.loops.concat(c.open);
+      });
+      items = items.filter(function (it) { return it.segs.length; });
+    }
     var bb = [Infinity, Infinity, -Infinity, -Infinity];
     items.forEach(function (it) {
       for (var i = 0; i < it.segs.length; i += 2) {
@@ -934,12 +980,14 @@
   function secHit(x, y) {
     var ctx = sec2d.ctx;
     for (var i = sec2d.paths.length - 1; i >= 0; i--) {
+      if (sec2d.paths[i].it.m.isTerrain) continue;
       if (ctx.isPointInPath(sec2d.paths[i].path, x * (sec2d.cv.width / sec2d.w), y * (sec2d.cv.height / sec2d.h), "evenodd")) return sec2d.paths[i].it;
     }
     // najbližšia čiara do 6 px
     var V = st.sec.view, best = null, bd = 6;
     if (!V || !st.sec.data) return null;
     st.sec.data.items.forEach(function (it) {
+      if (it.m.isTerrain) return;
       for (var s = 0; s < it.segs.length; s += 4) {
         var a = toScr(V, it.segs[s], it.segs[s + 1]), b = toScr(V, it.segs[s + 2], it.segs[s + 3]);
         var dd = distSeg(x, y, a, b);
@@ -1071,7 +1119,7 @@
     var W = pts.map(function (p) { return ifcToWorld(m0, p.x, p.y, p.z); });
     var items = [], bb = [Infinity, Infinity, -Infinity, -Infinity];
 
-    st.models.forEach(function (m) {
+    cutModels().forEach(function (m) {
       if (!m.visible) return;
       var inv = m.group.matrixWorld.clone().invert();
       var L = W.map(function (w) { return w.clone().applyMatrix4(inv); });
@@ -1140,7 +1188,8 @@
         // odrezaný — obrys s oboma koncami na tejto hranici sa uzavrie zvislou čiarou
         var edgeA = a.startStation - 0.5, edgeB = a.endStation + 0.5;
         var onEdge = function (x) { return Math.abs(x - edgeA) < 1e-4 || Math.abs(x - edgeB) < 1e-4; };
-        ch.open = ch.open.filter(function (Lp) {
+        // (terén je plocha, nie teleso — jeho čiara ostáva otvorená)
+        if (!m.isTerrain) ch.open = ch.open.filter(function (Lp) {
           if (Lp.length >= 6 && onEdge(Lp[0]) && onEdge(Lp[Lp.length - 2])) { ch.loops.push(Lp); return false; }
           return true;
         });
@@ -1339,6 +1388,7 @@
   function profHit(x, y) {
     var ctx = sec2d.ctx, sx = sec2d.cv.width / sec2d.w, sy = sec2d.cv.height / sec2d.h;
     for (var i = sec2d.paths.length - 1; i >= 0; i--) {
+      if (sec2d.paths[i].it.m.isTerrain) continue;
       if (ctx.isPointInPath(sec2d.paths[i].path, x * sx, y * sy, "evenodd")) return sec2d.paths[i].it;
     }
     return null;
@@ -1657,6 +1707,368 @@
     }, 30);
   }
 
+
+  // =========================================================================
+  //  Terén a mapové podklady
+  // =========================================================================
+  var G = window.IFCGeo;
+  var PROJ4_URL = "https://cdn.jsdelivr.net/npm/proj4@2.20.9/dist/proj4.js";
+  var proj4P = null;
+  function loadProj4() {
+    if (proj4P) return proj4P;
+    proj4P = new Promise(function (res, rej) {
+      if (window.proj4) { G.useProj4(window.proj4); res(); return; }
+      var sc = document.createElement("script");
+      sc.src = PROJ4_URL;
+      sc.onload = function () { G.useProj4(window.proj4); res(); };
+      sc.onerror = function () { proj4P = null; rej(new Error("knižnicu proj4 sa nepodarilo stiahnuť")); };
+      document.head.appendChild(sc);
+    });
+    return proj4P;
+  }
+
+  /* Súradnice sveta (scéna, Y hore) → súradnice projektu IFC (m, Z hore). */
+  function worldToIfc(m, v) {
+    var M = m.group.matrixWorld.clone().multiply(m.Mi).invert();
+    var p = v.clone().applyMatrix4(M);
+    return [p.x, -p.z, p.y];
+  }
+
+  /* Poloha z načítaných modelov: IfcMapConversion so známym systémom, inak
+     súradnice priamo v S-JTSK. Ručne zadanú polohu nové modely neprepíšu. */
+  function detectGeoref() {
+    if (st.geo.manual || !G) return;
+    st.geo.georef = null; st.geo.note = "";
+    for (var i = 0; i < st.models.length; i++) {
+      var m = st.models[i], mc = m.map;
+      if (!mc) continue;
+      var code = G.crsCode(mc.crs, mc.crsDesc);
+      // bez mena systému, ale posun leží v S-JTSK — v Česku a na Slovensku obvyklé
+      if (!code && G.looksLikeJtsk(mc.e, mc.n, mc.e, mc.n)) code = "EPSG:5514";
+      if (code && G.supported(code)) {
+        st.geo.georef = G.makeGeoref({ crs: code, e0: mc.e, n0: mc.n, h0: mc.h, ax: mc.ax, ay: mc.ay, scale: mc.scale, source: "mapconv" });
+        st.geo.note = "IfcMapConversion v " + m.name;
+        return;
+      }
+      st.geo.note = "IfcMapConversion v " + m.name + " používa systém „" + (mc.crs || "neuvedený") + "“, ktorý nástroj nepozná — zadajte polohu ručne.";
+    }
+    if (!st.models.length) return;
+    var b = projectBox();
+    if (b && G.looksLikeJtsk(b[0], b[1], b[2], b[3])) {
+      st.geo.georef = G.makeGeoref({ crs: "EPSG:5514", source: "direct" });
+      st.geo.note = "súradnice modelu ležia priamo v S-JTSK";
+    }
+  }
+
+  /* Obdĺžnik zobrazených modelov v súradniciach projektu [minX, minY, maxX, maxY, minZ, maxZ]. */
+  function projectBox() {
+    var box = visibleBox(); if (box.isEmpty() || !st.models.length) return null;
+    var m = st.models[0], T = Lib.T, out = [Infinity, Infinity, -Infinity, -Infinity, Infinity, -Infinity];
+    for (var c = 0; c < 8; c++) {
+      var p = worldToIfc(m, new T.Vector3(c & 1 ? box.max.x : box.min.x, c & 2 ? box.max.y : box.min.y, c & 4 ? box.max.z : box.min.z));
+      out[0] = Math.min(out[0], p[0]); out[1] = Math.min(out[1], p[1]); out[2] = Math.max(out[2], p[0]); out[3] = Math.max(out[3], p[1]);
+      out[4] = Math.min(out[4], p[2]); out[5] = Math.max(out[5], p[2]);
+    }
+    return out;
+  }
+
+  function loadImg(url) {
+    return new Promise(function (res, rej) {
+      var im = new Image();
+      im.crossOrigin = "anonymous";     // bez CORS by sa obrázok nedal použiť ako textúra
+      im.onload = function () { res(im); };
+      im.onerror = function () { rej(new Error("obrázok sa nenačítal")); };
+      im.src = url;
+    });
+  }
+
+  /* Mozaika dlaždíc XYZ pokrývajúca obdĺžnik v EPSG:3857. */
+  function xyzMosaic(src, minX, minY, maxX, maxY, maxTiles) {
+    var z = G.zoomFor(minX, minY, maxX, maxY, src.maxZoom || 18, maxTiles);
+    var a = G.mercToTile(minX, maxY, z), b = G.mercToTile(maxX, minY, z);
+    var tx0 = Math.floor(a[0] / 256), ty0 = Math.floor(a[1] / 256), tx1 = Math.floor(b[0] / 256), ty1 = Math.floor(b[1] / 256);
+    var cv = document.createElement("canvas");
+    cv.width = (tx1 - tx0 + 1) * 256; cv.height = (ty1 - ty0 + 1) * 256;
+    var ctx = cv.getContext("2d"), jobs = [], fails = 0;
+    for (var tx = tx0; tx <= tx1; tx++) for (var ty = ty0; ty <= ty1; ty++) (function (tx, ty) {
+      var url = src.url.replace("{z}", z).replace("{x}", tx).replace("{y}", ty);
+      jobs.push(loadImg(url).then(function (im) { ctx.drawImage(im, (tx - tx0) * 256, (ty - ty0) * 256); }, function () { fails++; }));
+    })(tx, ty);
+    return Promise.all(jobs).then(function () {
+      if (fails === jobs.length) throw new Error(src.label + ": dlaždice sa nenačítali");
+      return { canvas: cv, z: z, px0: tx0 * 256, py0: ty0 * 256 };
+    });
+  }
+
+  var capsCache = {};
+  function wmsLayers(src) {
+    if (capsCache[src.url]) return capsCache[src.url];
+    capsCache[src.url] = fetch(G.wmsCapsUrl(src)).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.text();
+    }).then(function (t) {
+      var caps = G.parseCaps(new DOMParser().parseFromString(t, "text/xml"));
+      if (!caps.layers.length) throw new Error("služba neuvádza vrstvy");
+      // niektoré služby ArcGIS uvádzajú S-JTSK len ako ESRI:102067
+      var crs = caps.crs.indexOf("EPSG:5514") >= 0 || !caps.crs.length ? "EPSG:5514" :
+        caps.crs.indexOf("EPSG:102067") >= 0 ? "EPSG:102067" : "EPSG:5514";
+      return { layers: caps.layers, crs: crs };
+    });
+    capsCache[src.url].catch(function () { delete capsCache[src.url]; });
+    return capsCache[src.url];
+  }
+
+  function setGeoStatus(text, attr) {
+    st.geo.status = text || ""; if (attr !== undefined) st.geo.attr = attr;
+    var el = $("mdGeoStatus"); if (el) el.textContent = st.geo.status;
+    var at = $("mdGeoAttr"); if (at) at.textContent = st.geo.attr;
+  }
+
+  function removeTerrain() {
+    if (st.geo.mesh) {
+      three.scene.remove(st.geo.mesh);
+      st.geo.mesh.geometry.dispose();
+      if (st.geo.mesh.material.map) st.geo.mesh.material.map.dispose();
+      st.geo.mesh.material.dispose();
+    }
+    st.geo.mesh = null; st.geo.model = null;
+    st.sec.prof = null;
+    refreshSection();
+    requestRender();
+  }
+
+  /* Terén okolo modelov: pravidelná sieť v súradniciach projektu, výšky
+     z výškového modelu, na ňom mapa. Každý vrchol sa prevedie do systému
+     podkladu, takže mapa sedí aj pri inom systéme modelu než má služba. */
+  function buildTerrain() {
+    var g = st.geo, o = g.opt, T = Lib.T;
+    if (g.busy) return;
+    if (!g.georef) { setGeoStatus("Poloha modelu nie je známa — zadajte ju ručne."); return; }
+    var b = projectBox(); if (!b) return;
+    g.busy = true; renderGeo();
+    setGeoStatus("sťahuje sa knižnica na prevod súradníc…", "");
+    loadProj4().then(function () {
+      var gr = g.georef;
+      var x0 = b[0] - o.margin, y0 = b[1] - o.margin, x1 = b[2] + o.margin, y1 = b[3] + o.margin;
+      var span = Math.max(x1 - x0, y1 - y0), step = Math.max(1, span / 180);
+      var nx = Math.max(2, Math.ceil((x1 - x0) / step) + 1), ny = Math.max(2, Math.ceil((y1 - y0) / step) + 1);
+      var n = nx * ny, xs = new Float64Array(n), ys = new Float64Array(n);
+      var E = new Float64Array(n), N = new Float64Array(n), lon = new Float64Array(n), lat = new Float64Array(n);
+      for (var j = 0; j < ny; j++) for (var i = 0; i < nx; i++) {
+        var k = j * nx + i, x = x0 + (x1 - x0) * i / (nx - 1), y = y0 + (y1 - y0) * j / (ny - 1);
+        xs[k] = x; ys[k] = y;
+        var mp = gr.toMap(x, y, 0); E[k] = mp[0]; N[k] = mp[1];
+        var ll = G.transform(gr.crs, "EPSG:4326", [mp[0], mp[1]]); lon[k] = ll[0]; lat[k] = ll[1];
+      }
+      var c = (ny >> 1) * nx + (nx >> 1);
+      var land = o.country === "auto" ? (G.country(lon[c], lat[c]) || "CZ") : o.country;
+      var job = { nx: nx, ny: ny, n: n, xs: xs, ys: ys, E: E, N: N, lon: lon, lat: lat, land: land,
+                  H: null, uv: null, tex: null, notes: [], attr: [] };
+      setGeoStatus("načítava sa výškový model…");
+      return terrainHeights(job).then(function () {
+        setGeoStatus("načítava sa mapa…");
+        return terrainImage(job);
+      }).then(function () { makeTerrainMesh(job, b); });
+    }).catch(function (e) {
+      setGeoStatus("Terén sa nepodarilo vytvoriť: " + (e && e.message ? e.message : e));
+    }).then(function () { g.busy = false; renderGeo(); });
+  }
+
+  function terrainHeights(job) {
+    var g = st.geo;
+    if (g.opt.terrain !== "dem") return Promise.resolve();
+    var src = G.SOURCES.terrarium.any;
+    var mx = new Float64Array(job.n), my = new Float64Array(job.n), b = [Infinity, Infinity, -Infinity, -Infinity];
+    for (var k = 0; k < job.n; k++) {
+      var p = G.transform("EPSG:4326", "EPSG:3857", [job.lon[k], job.lat[k]]); mx[k] = p[0]; my[k] = p[1];
+      b[0] = Math.min(b[0], p[0]); b[1] = Math.min(b[1], p[1]); b[2] = Math.max(b[2], p[0]); b[3] = Math.max(b[3], p[1]);
+    }
+    return xyzMosaic(src, b[0], b[1], b[2], b[3], 36).then(function (mo) {
+      var W = mo.canvas.width, H = mo.canvas.height;
+      var data = mo.canvas.getContext("2d").getImageData(0, 0, W, H).data;
+      var px = function (x, y) {
+        x = Math.max(0, Math.min(W - 1, x)); y = Math.max(0, Math.min(H - 1, y));
+        var o = (y * W + x) * 4;
+        return G.terrariumHeight(data[o], data[o + 1], data[o + 2]);
+      };
+      job.H = new Float64Array(job.n);
+      for (var k = 0; k < job.n; k++) {
+        var t = G.mercToTile(mx[k], my[k], mo.z), u = t[0] - mo.px0 - 0.5, v = t[1] - mo.py0 - 0.5;
+        var i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j;
+        job.H[k] = px(i, j) * (1 - fu) * (1 - fv) + px(i + 1, j) * fu * (1 - fv) + px(i, j + 1) * (1 - fu) * fv + px(i + 1, j + 1) * fu * fv;
+      }
+      job.attr.push("výšky: " + src.attr);
+      job.notes.push("výškový model " + src.label + " · zoom " + mo.z);
+    }).catch(function (e) {
+      job.H = null;
+      job.notes.push("výškový model nedostupný (" + e.message + ") — terén je rovina");
+    });
+  }
+
+  function terrainImage(job) {
+    var o = st.geo.opt;
+    if (o.base === "none") return Promise.resolve();
+    var src = o.base === "osm" ? G.SOURCES.osm.any : (G.SOURCES[o.base] || {})[job.land];
+    if (!src) return Promise.resolve();
+    var gr = st.geo.georef, uv = new Float32Array(job.n * 2);
+    if (src.kind === "wms") {
+      return wmsLayers(src).then(function (caps) {
+        // vrcholy v S-JTSK — mapa sa pýta priamo v ňom
+        var e = new Float64Array(job.n), nn = new Float64Array(job.n), b = [Infinity, Infinity, -Infinity, -Infinity];
+        for (var k = 0; k < job.n; k++) {
+          var p = gr.crs === "EPSG:5514" ? [job.E[k], job.N[k]] : G.transform(gr.crs, "EPSG:5514", [job.E[k], job.N[k]]);
+          e[k] = p[0]; nn[k] = p[1];
+          b[0] = Math.min(b[0], p[0]); b[1] = Math.min(b[1], p[1]); b[2] = Math.max(b[2], p[0]); b[3] = Math.max(b[3], p[1]);
+        }
+        var dE = b[2] - b[0], dN = b[3] - b[1], max = 2048;
+        var w = dE >= dN ? max : Math.max(64, Math.round(max * dE / dN)), h = dE >= dN ? Math.max(64, Math.round(max * dN / dE)) : max;
+        return loadImg(G.wmsGetMap(src, caps.layers, caps.crs, b, w, h)).then(function (im) {
+          for (var k = 0; k < job.n; k++) { uv[k * 2] = (e[k] - b[0]) / dE; uv[k * 2 + 1] = (nn[k] - b[1]) / dN; }
+          job.tex = im; job.uv = uv; job.attr.push("mapa: " + src.label + " " + src.attr);
+        });
+      }).catch(function (e) {
+        job.notes.push(src.label + " nedostupná (" + e.message + "; služba nemusí povoľovať CORS)");
+      });
+    }
+    var mx = new Float64Array(job.n), my = new Float64Array(job.n), b = [Infinity, Infinity, -Infinity, -Infinity];
+    for (var k = 0; k < job.n; k++) {
+      var p = G.transform("EPSG:4326", "EPSG:3857", [job.lon[k], job.lat[k]]); mx[k] = p[0]; my[k] = p[1];
+      b[0] = Math.min(b[0], p[0]); b[1] = Math.min(b[1], p[1]); b[2] = Math.max(b[2], p[0]); b[3] = Math.max(b[3], p[1]);
+    }
+    return xyzMosaic(src, b[0], b[1], b[2], b[3], 48).then(function (mo) {
+      for (var k = 0; k < job.n; k++) {
+        var t = G.mercToTile(mx[k], my[k], mo.z);
+        uv[k * 2] = (t[0] - mo.px0) / mo.canvas.width; uv[k * 2 + 1] = 1 - (t[1] - mo.py0) / mo.canvas.height;
+      }
+      job.tex = mo.canvas; job.uv = uv; job.attr.push("mapa: " + src.attr);
+    }).catch(function (e) { job.notes.push(src.label + " nedostupná (" + e.message + ")"); });
+  }
+
+  function makeTerrainMesh(job, b) {
+    var T = Lib.T, gr = st.geo.georef, base = st.models[0];
+    var pos = new Float32Array(job.n * 3);
+    var flat = b[4] - 0.05;                       // bez výšok: rovina tesne pod modelom
+    var bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+    for (var k = 0; k < job.n; k++) {
+      var z = job.H ? gr.toLocal(job.E[k], job.N[k], job.H[k])[2] : flat;
+      var v = ifcToWorld(base, job.xs[k], job.ys[k], z);
+      pos[k * 3] = v.x; pos[k * 3 + 1] = v.y; pos[k * 3 + 2] = v.z;
+      bb[0] = Math.min(bb[0], v.x); bb[1] = Math.min(bb[1], v.y); bb[2] = Math.min(bb[2], v.z);
+      bb[3] = Math.max(bb[3], v.x); bb[4] = Math.max(bb[4], v.y); bb[5] = Math.max(bb[5], v.z);
+    }
+    var idx = new Uint32Array((job.nx - 1) * (job.ny - 1) * 6), q = 0;
+    for (var j = 0; j < job.ny - 1; j++) for (var i = 0; i < job.nx - 1; i++) {
+      var a = j * job.nx + i, c = a + job.nx;
+      idx[q++] = a; idx[q++] = a + 1; idx[q++] = c; idx[q++] = a + 1; idx[q++] = c + 1; idx[q++] = c;
+    }
+    var geo = new T.BufferGeometry();
+    geo.setAttribute("position", new T.BufferAttribute(pos, 3));
+    geo.setIndex(new T.BufferAttribute(idx, 1));
+    if (job.uv) geo.setAttribute("uv", new T.BufferAttribute(job.uv, 2));
+    geo.computeVertexNormals();
+    var map = null;
+    if (job.tex) {
+      map = job.tex.tagName === "CANVAS" ? new T.CanvasTexture(job.tex) : new T.Texture(job.tex);
+      map.colorSpace = T.SRGBColorSpace; map.anisotropy = 4; map.needsUpdate = true;
+    }
+    var mat = new T.MeshLambertMaterial({ map: map, color: map ? 0xffffff : 0xCFC8B6, side: T.DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: 3, polygonOffsetUnits: 3 });
+    if (st.geo.mesh) removeTerrain();
+    var mesh = new T.Mesh(geo, mat);
+    mesh.renderOrder = -1;
+    three.scene.add(mesh);
+    st.geo.mesh = mesh;
+    // terén ako „model“ pre rezy a profil — prieniky sa počítajú rovnako ako pri IFC
+    var prod = { id: 1, cls: "TEREN", parts: [{ ch: { posA: pos, idxA: idx }, start: 0, count: idx.length }], bb: bb, color: [0.55, 0.42, 0.26, 1] };
+    st.geo.model = { uid: 0, name: "terén", color: "#8C6B42", visible: true, isTerrain: true,
+      group: { matrixWorld: new T.Matrix4() }, products: new Map([[1, prod]]), classes: new Map() };
+    applyMaterials();
+    st.sec.prof = null;
+    refreshSection();
+    setGeoStatus((job.H ? "Terén je hotový" : "Plocha je hotová") + " — " + job.nx + " × " + job.ny + " bodov, " +
+      (job.land === "SK" ? "Slovensko" : "Česko") + ". " + job.notes.join(" · "), job.attr.join(" · "));
+  }
+
+  // ---- panel „terén a mapa“ ----------------------------------------------------
+  function renderGeo() {
+    var g = st.geo, o = g.opt, el = $("mdGeoBody"); if (!el) return;
+    var gr = g.georef;
+    var where = gr ? esc(G.CRS_LABEL[gr.crs] || gr.crs) + ' <span class="mg__src">· ' + esc(g.manual ? "zadané ručne" : g.note) + "</span>" :
+      '<span class="mg__bad">' + esc(g.note || "Poloha modelu nie je známa — model nemá IfcMapConversion a nie je v S-JTSK.") + "</span>";
+    var sel = function (id, cur, opts) {
+      return '<select id="' + id + '">' + opts.map(function (x) {
+        return '<option value="' + x[0] + '"' + (String(cur) === String(x[0]) ? " selected" : "") + ">" + esc(x[1]) + "</option>";
+      }).join("") + "</select>";
+    };
+    var m0 = gr || { crs: "EPSG:5514", e0: 0, n0: 0, h0: 0, rotationDeg: 0 };
+    el.innerHTML =
+      '<div class="pop__sub">poloha modelu</div><div class="mg__where">' + where + "</div>" +
+      '<details class="mg__man"' + (!gr ? " open" : "") + "><summary>zadať polohu ručne</summary>" +
+        '<div class="mg__grid">' +
+          '<label>systém ' + sel("mgCrs", m0.crs, Object.keys(G.CRS_LABEL).map(function (k) { return [k, G.CRS_LABEL[k]]; })) + "</label>" +
+          '<label>E počiatku <input id="mgE" type="number" step="0.001" value="' + m0.e0 + '"></label>' +
+          '<label>N počiatku <input id="mgN" type="number" step="0.001" value="' + m0.n0 + '"></label>' +
+          '<label>výška počiatku <input id="mgH" type="number" step="0.001" value="' + m0.h0 + '"></label>' +
+          '<label>natočenie osi X (°) <input id="mgR" type="number" step="0.0001" value="' + (+m0.rotationDeg.toFixed(6)) + '"></label>' +
+        "</div>" +
+        '<div class="mg__row"><button class="minibtn" id="mgApply">použiť</button>' +
+        (g.manual ? '<button class="linkbtn" id="mgAuto">zistiť z modelu</button>' : "") + "</div>" +
+        '<div class="help">Bod 0,0,0 súradníc modelu v zvolenom systéme. Pre S-JTSK zadajte záporné súradnice (napr. E −598 000, N −1 160 000).</div>' +
+      "</details>" +
+      '<div class="pop__sub">podklad</div>' +
+      '<div class="mg__grid">' +
+        "<label>mapa " + sel("mgBase", o.base, [["ortofoto", "ortofotomapa (ČÚZK / ZBGIS)"], ["mapa", "základná mapa (ZTM / ZBGIS)"], ["osm", "OpenStreetMap"], ["none", "bez mapy"]]) + "</label>" +
+        "<label>krajina " + sel("mgLand", o.country, [["auto", "podľa polohy"], ["CZ", "Česko — ČÚZK"], ["SK", "Slovensko — GKÚ"]]) + "</label>" +
+        "<label>terén " + sel("mgTer", o.terrain, [["dem", "výškový model"], ["flat", "rovina pod modelom"]]) + "</label>" +
+        "<label>oblasť " + sel("mgMargin", o.margin, [[100, "±100 m okolo modelov"], [250, "±250 m"], [500, "±500 m"], [1000, "±1 km"], [2000, "±2 km"]]) + "</label>" +
+        '<label>priehľadnosť <input id="mgOp" type="range" min="0.2" max="1" step="0.05" value="' + o.opacity + '"></label>' +
+      "</div>" +
+      '<div class="mg__row"><button class="btn btn--sm" id="mgGo"' + (g.busy || !gr ? " disabled" : "") + ">" +
+        (g.busy ? "načítava sa…" : g.mesh ? "obnoviť terén" : "načítať terén a mapu") + "</button>" +
+        (g.mesh ? '<label class="radio radio--flat"><input type="checkbox" id="mgShow"' + (g.mesh.visible ? " checked" : "") + '><span>zobraziť</span></label>' +
+                  '<button class="linkbtn" id="mgDel">odstrániť</button>' : "") + "</div>" +
+      '<div class="mg__status" id="mdGeoStatus">' + esc(g.status) + "</div>" +
+      '<div class="mg__attr" id="mdGeoAttr">' + esc(g.attr) + "</div>";
+    $("mdGeoBtn").classList.toggle("is-on", !!(g.mesh && g.mesh.visible));
+  }
+
+  function wireGeo() {
+    var body = $("mdGeoBody");
+    body.addEventListener("click", function (e) {
+      var id = e.target.id;
+      if (id === "mgGo") buildTerrain();
+      else if (id === "mgDel") { removeTerrain(); setGeoStatus("", ""); renderGeo(); }
+      else if (id === "mgAuto") { st.geo.manual = false; detectGeoref(); renderGeo(); }
+      else if (id === "mgApply") {
+        var r = (+$("mgR").value || 0) * Math.PI / 180;
+        st.geo.georef = G.makeGeoref({ crs: $("mgCrs").value, e0: +$("mgE").value, n0: +$("mgN").value, h0: +$("mgH").value,
+          ax: Math.cos(r), ay: Math.sin(r), source: "manual" });
+        st.geo.manual = true;
+        setGeoStatus("Poloha nastavená — načítajte terén.");
+        renderGeo();
+      }
+    });
+    body.addEventListener("change", function (e) {
+      var o = st.geo.opt, id = e.target.id;
+      if (id === "mgBase") o.base = e.target.value;
+      else if (id === "mgLand") o.country = e.target.value;
+      else if (id === "mgTer") o.terrain = e.target.value;
+      else if (id === "mgMargin") o.margin = +e.target.value;
+      else if (id === "mgShow") {
+        st.geo.mesh.visible = e.target.checked;
+        st.sec.prof = null; refreshSection(); renderGeo(); requestRender();
+      }
+    });
+    body.addEventListener("input", function (e) {
+      if (e.target.id === "mgOp") { st.geo.opt.opacity = +e.target.value; applyMaterials(); }
+    });
+    $("mdGeo").addEventListener("toggle", function () { if (this.open) renderGeo(); });
+    document.addEventListener("click", function (e) {
+      var d = $("mdGeo");
+      if (d.open && !d.contains(e.target)) d.open = false;
+    });
+  }
+
   // =========================================================================
   //  Rozhranie
   // =========================================================================
@@ -1732,6 +2144,8 @@
         rebuildIndices();
         applyMaterials();
         if (first) focusBox(visibleBox(), new Lib.T.Vector3(1, 0.8, 1));
+        detectGeoref();
+        renderGeo();
         renderAll();
         // prvá trasa → hneď pripraviť rezy
         if (!st.sec.al) {
@@ -1762,6 +2176,8 @@
     st.models.splice(i, 1);
     Array.from(st.hidden).forEach(function (k) { if (k.indexOf(m.uid + ":") === 0) st.hidden.delete(k); });
     if (!st.models.length) { window.ModelTool.reset(); return; }
+    detectGeoref();
+    renderGeo();
     rebuildIndices();
     renderAll();
   }
@@ -2147,6 +2563,7 @@
       drawSection();
     });
     wireSecCanvas();
+    wireGeo();
     new ResizeObserver(function () { if (!$("mdSec").hidden) sizeSecCanvas(); }).observe($("secWrap"));
   }
 
@@ -2191,7 +2608,9 @@
       }
       st.models = []; st.origin = null; st.sel = null; st.hidden = new Set(); st.isolate = null;
       st.sec.al = null; st.sec.data = null; st.sec.view = null; st.sec.prof = null; st.sec.pview = null;
-      if (three) { three.clip = []; drawSection3D(); }
+      if (three) { removeTerrain(); three.clip = []; drawSection3D(); }
+      st.geo.georef = null; st.geo.manual = false; st.geo.note = ""; st.geo.status = ""; st.geo.attr = "";
+      $("mdGeo").open = false;
       $("mdApp").hidden = true; $("mdSec").hidden = true;
       renderDrop();
       syncBar();

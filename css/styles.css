@@ -876,6 +876,24 @@ details.pop.is-on > summary{background:var(--secondary);border-color:var(--secon
   background:none;border:1px solid transparent;padding:1px 6px;cursor:pointer}
 .md__sideX:hover{color:var(--ink);border-color:var(--line-strong);background:var(--paper)}
 /* vybraný prvok pri skrytom paneli — tlačidlo naznačí, že je čo ukázať */
+/* panel „terén a mapa“ */
+.md-geo__body{width:400px}
+#mdGeoBtn.is-on{background:var(--model-tint);border-color:var(--model-line);color:var(--model)}
+.mg__where{font-family:var(--mono);font-size:11.5px;margin-bottom:6px}
+.mg__src{color:var(--faint)}
+.mg__bad{color:var(--warn);font-family:var(--sans);font-size:12px}
+.mg__man{margin:4px 0 12px;border:1px solid var(--line);padding:6px 8px}
+.mg__man > summary{cursor:pointer;font-family:var(--mono);font-size:11px;color:var(--model)}
+.mg__grid{display:grid;grid-template-columns:1fr;gap:6px;margin:8px 0}
+.mg__grid > label{display:grid;grid-template-columns:120px 1fr;align-items:center;gap:8px;
+  font-family:var(--mono);font-size:11px;color:var(--muted)}
+.mg__grid select,.mg__grid input[type=number]{font-family:var(--mono);font-size:11.5px;padding:4px 5px;width:100%;
+  border:1px solid var(--line-strong);background:var(--surface);min-width:0}
+.mg__grid input[type=range]{accent-color:var(--model)}
+.mg__row{display:flex;align-items:center;gap:12px;margin:8px 0 4px}
+.mg__status{font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:6px}
+.mg__status:empty,.mg__attr:empty{display:none}
+.mg__attr{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:6px}
 #mdSideBtn.has-sel::after{content:" •";color:var(--model);font-weight:700}
 .md-acts{display:flex;flex-wrap:wrap;gap:5px;margin:-4px 0 6px}
 .md__gap{flex:1}
