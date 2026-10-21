@@ -816,7 +816,7 @@ details.pop.is-on > summary{background:var(--secondary);border-color:var(--secon
 
 
 /* =========================================================================
-   NÁSTROJ 4 — 3D PREHLIADAČ, KOORDINÁCIA A REZY PO TRASE
+   NÁSTROJ 1 — 3D PREHLIADAČ, KOORDINÁCIA A REZY PO TRASE
    ========================================================================= */
 #view-model > *{width:100%;max-width:var(--page-w);margin-inline:auto}
 #view-model code{font-family:var(--mono);font-size:12px}

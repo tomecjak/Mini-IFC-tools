@@ -1,4 +1,4 @@
-/* model.js — 3D prehliadač IFC modelov a koordinácia viacerých súborov (nástroj [04]).
+/* model.js — 3D prehliadač IFC modelov a koordinácia viacerých súborov (nástroj [01]).
  *
  * Geometriu z IFC vyrába knižnica web-ifc (WebAssembly), kreslí three.js — obe sa
  * stiahnu z CDN až pri prvom otvorení modelu (adresy v import mape v index.html).

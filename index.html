@@ -75,23 +75,24 @@
   <div class="note note--warn note--mobile">Nástroje sú stavané na desktop — na telefóne si ich viete pozrieť, ale prácu s modelom robte na počítači.</div>
 
   <section class="tools">
-    <a class="tool tool--merge" href="#/merge">
+    <a class="tool tool--model" href="#/model">
       <div class="tool__b">
         <div class="tool__h">
           <span class="tool__no">[01]</span>
-          <span class="tool__name">merge</span>
-          <span class="tool__sub">zlúčenie modelov</span>
+          <span class="tool__name">model</span>
+          <span class="tool__sub">3D prehliadač a koordinácia</span>
         </div>
-        <p>Primárny model si drží stavebnú štruktúru, zo sekundárneho pridáte vybrané objekty s geometriou, umiestnením, materiálmi a property setmi.</p>
+        <p>Model v 3D — aj viac súborov naraz v spoločných súradniciach projektu. Pre IFC 4.3 vykreslí os trasy (IfcAlignment) so staničením a urobí priečne rezy v ľubovoľnom staničení.</p>
         <ul class="tool__list">
-          <li>výber objektov po triedach</li>
-          <li>rebase na cieľové podlažie + manuálny posun</li>
-          <li>validácia výstupu pred stiahnutím</li>
+          <li>viac modelov naraz, farba podľa modelu</li>
+          <li>triedy, skrytie, izolácia, vlastnosti</li>
+          <li>trasa IFC 4.3 a staničenie</li>
+          <li>priečne rezy, pozdĺžny profil, export do DXF</li>
+          <li>terén a ortofotomapa ČÚZK / ZBGIS</li>
         </ul>
       </div>
-      <span class="tool__go">otvoriť merge <span class="tool__arr">→</span></span>
+      <span class="tool__go">otvoriť model <span class="tool__arr">→</span></span>
     </a>
-
     <a class="tool tool--view" href="#/viewer">
       <div class="tool__b">
         <div class="tool__h">
@@ -126,29 +127,28 @@
       </div>
       <span class="tool__go">otvoriť validate <span class="tool__arr">→</span></span>
     </a>
-    <a class="tool tool--model" href="#/model">
+    <a class="tool tool--merge" href="#/merge">
       <div class="tool__b">
         <div class="tool__h">
           <span class="tool__no">[04]</span>
-          <span class="tool__name">model</span>
-          <span class="tool__sub">3D prehliadač a koordinácia</span>
+          <span class="tool__name">merge</span>
+          <span class="tool__sub">zlúčenie modelov</span>
         </div>
-        <p>Model v 3D — aj viac súborov naraz v spoločných súradniciach projektu. Pre IFC 4.3 vykreslí os trasy (IfcAlignment) so staničením a urobí priečne rezy v ľubovoľnom staničení.</p>
+        <p>Primárny model si drží stavebnú štruktúru, zo sekundárneho pridáte vybrané objekty s geometriou, umiestnením, materiálmi a property setmi.</p>
         <ul class="tool__list">
-          <li>viac modelov naraz, farba podľa modelu</li>
-          <li>triedy, skrytie, izolácia, vlastnosti</li>
-          <li>trasa IFC 4.3 a staničenie</li>
-          <li>priečne rezy, pozdĺžny profil, export do DXF</li>
-          <li>terén a ortofotomapa ČÚZK / ZBGIS</li>
+          <li>výber objektov po triedach</li>
+          <li>rebase na cieľové podlažie + manuálny posun</li>
+          <li>validácia výstupu pred stiahnutím</li>
         </ul>
       </div>
-      <span class="tool__go">otvoriť model <span class="tool__arr">→</span></span>
+      <span class="tool__go">otvoriť merge <span class="tool__arr">→</span></span>
     </a>
+
   </section>
 
 </div>
 
-<!-- ======================= NÁSTROJ 1 — ZLÚČENIE ======================= -->
+<!-- ======================= NÁSTROJ 4 — ZLÚČENIE ======================= -->
 <div class="sheet view" id="view-merge">
 
   <section class="card toolhead" id="mgHead">
@@ -355,7 +355,7 @@
 
 </div>
 
-<!-- ======================= NÁSTROJ 4 — 3D MODEL A KOORDINÁCIA ======================= -->
+<!-- ======================= NÁSTROJ 1 — 3D MODEL A KOORDINÁCIA ======================= -->
 <div class="sheet view" id="view-model">
 
   <section class="card toolhead" id="mdHead">
