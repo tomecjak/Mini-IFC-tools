@@ -515,6 +515,47 @@ details.adv[open] > summary::before{content:"–"}
 .fnd__go:focus-visible{opacity:1;outline:2px solid var(--check);outline-offset:1px}
 .fnd__tip{color:var(--faint);font-weight:400}
 
+/* výber druhu kontroly — buildingSMART / IDS */
+.vlmode{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--check-line);background:var(--surface)}
+.vlmode__b{
+  display:flex;flex-direction:column;align-items:flex-start;gap:3px;text-align:left;
+  padding:11px 16px;border:none;background:none;cursor:pointer;color:var(--check);font:inherit;
+}
+.vlmode__b + .vlmode__b{border-left:1px solid var(--check-line)}
+.vlmode__b:hover{background:var(--check-tint)}
+.vlmode__b.is-on{background:var(--check);color:#fff}
+.vlmode__b:focus-visible{outline:2px solid var(--check);outline-offset:2px}
+.vlmode__t{font-family:var(--mono);font-size:13px;font-weight:600}
+.vlmode__s{font-size:12px;opacity:.8}
+
+.panel--check .panel__tag{background:var(--check)}
+.panel--check .drop.is-over{border-color:var(--check);background:var(--check-tint)}
+.panel--check .drop.is-over .drop__icon{opacity:1;color:var(--check)}
+.chk.is-skip .chk__i{color:var(--faint);background:var(--paper)}
+
+/* IDS — nahraté súbory */
+.idsf{display:flex;flex-direction:column;gap:4px;flex:1}
+.idsf__r{display:flex;gap:10px;font-size:12.5px;line-height:1.45}
+.idsf__k{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--faint);width:96px;flex:none;padding-top:2px}
+.idsf__d{font-size:12.5px;color:var(--muted);line-height:1.5;margin-top:4px}
+.idsf__act{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}
+
+/* IDS — vyhodnotenie špecifikácií */
+.ids__title{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;font-size:14px;font-weight:600}
+.ids__meta{font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:4px;overflow-wrap:anywhere}
+.ids__reqs{list-style:none;margin:8px 0 0;padding:0;border:1px solid var(--line)}
+.ids__reqs > li{padding:7px 9px;border-bottom:1px solid var(--line)}
+.ids__reqs > li:last-child{border-bottom:none}
+.ids__rh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:12.5px;line-height:1.45}
+.ids__ri{font-family:var(--mono);font-weight:600;width:12px;flex:none}
+.ids__reqs .is-ok .ids__ri{color:var(--primary)}
+.ids__reqs .is-bad .ids__ri{color:var(--danger)}
+.ids__reqs .is-skip .ids__ri{color:var(--faint)}
+.ids__reqs .is-bad .chk__n{color:var(--danger)}
+.ids__ft{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--check);border:1px solid var(--check-line);padding:0 5px;flex:none}
+
 /* hĺbková kontrola */
 .deep__body{padding:16px;display:flex;flex-direction:column;gap:12px}
 .deep__body .help{margin:0}
@@ -980,6 +1021,8 @@ details.pop.is-on > summary{background:var(--secondary);border-color:var(--secon
   .bar__inner{gap:9px}
   .bar__sub{display:none}
   .inputs,.tools,.settings__grid{grid-template-columns:1fr}
+  .vlmode{grid-template-columns:1fr}
+  .vlmode__b + .vlmode__b{border-left:none;border-top:1px solid var(--check-line)}
   .note--mobile{display:flex}
   .vw__search{flex:1 1 100%}
   .vw__visible{margin-left:0}

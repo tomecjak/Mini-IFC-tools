@@ -117,12 +117,12 @@
           <span class="tool__name">validate</span>
           <span class="tool__sub">kontrola súboru</span>
         </div>
-        <p>Rýchla kontrola zápisu a väzieb hneď po nahratí. Na vyžiadanie aj hĺbková kontrola podľa schémy EXPRESS a 104 normatívnych pravidiel — tým istým jadrom, ktoré poháňa validačnú službu buildingSMART.</p>
+        <p>Dve validácie. Podľa buildingSMART — zápis, schéma EXPRESS a 104 normatívnych pravidiel tým istým jadrom, ktoré poháňa validačnú službu buildingSMART. Podľa IDS — vyhodnotenie požiadaviek zadávateľa na informácie v modeli.</p>
         <ul class="tool__list">
           <li>štruktúra, čísla entít, GlobalId</li>
-          <li>visiace odkazy a nepoužité entity</li>
           <li>typy atribútov a pravidlá WHERE</li>
           <li>Implementer Agreements a praktiky</li>
+          <li>IDS: triedy, vlastnosti, klasifikácie</li>
         </ul>
       </div>
       <span class="tool__go">otvoriť validate <span class="tool__arr">→</span></span>
@@ -332,10 +332,22 @@
   <section class="card toolhead" id="vlHead">
     <div class="kicker kicker--chk">// kontrola kvality</div>
     <h1>Validácia IFC súboru</h1>
-    <p class="lede">Tri úrovne kontroly. <b>Rýchla</b> prebehne hneď po nahratí — štruktúra súboru, verzia schémy, zápis entít, duplicitné čísla a GlobalId, visiace odkazy. <b>Hĺbková</b> použije jadro <b>ifcopenshell.validate</b>: dátové typy atribútov, kardinality, výčty a pravidlá WHERE zo schémy EXPRESS. <b>Normatívne pravidlá</b> spustia 104 predpisov z <b>ifc-gherkin-rules</b> — Implementer Agreements a Informal Propositions. Posledné dve sa spúšťajú tlačidlom, lebo si stiahnu knižnice validačnej služby buildingSMART. Súbor sa nikam neodosiela.</p>
+    <p class="lede">Dva spôsoby kontroly. <b>buildingSMART</b> overí, či je súbor správne zapísaný podľa štandardu IFC — rýchla kontrola zápisu a väzieb hneď po nahratí, na vyžiadanie hĺbková kontrola podľa schémy EXPRESS (<b>ifcopenshell.validate</b>) a 104 normatívnych pravidiel z <b>ifc-gherkin-rules</b>. <b>IDS</b> overí, či model obsahuje informácie, ktoré od neho požaduje zadávateľ — triedy, atribúty, vlastnosti, klasifikácie a materiály podľa súboru <b>IDS</b> (Information Delivery Specification). Súbory sa nikam neodosielajú.</p>
   </section>
 
-  <!-- nahranie súboru -->
+  <!-- výber druhu kontroly -->
+  <nav class="vlmode" id="vlMode" aria-label="Druh kontroly">
+    <button class="vlmode__b" type="button" data-mode="bsdd">
+      <span class="vlmode__t">buildingSMART</span>
+      <span class="vlmode__s">zápis, schéma IFC a normatívne pravidlá</span>
+    </button>
+    <button class="vlmode__b" type="button" data-mode="ids">
+      <span class="vlmode__t">IDS</span>
+      <span class="vlmode__s">požiadavky na informácie zo súboru .ids</span>
+    </button>
+  </nav>
+
+  <!-- buildingSMART — nahranie súboru -->
   <section class="panel panel--check" id="vlPanel">
     <div class="panel__head">
       <span class="panel__tag">súbor</span>
@@ -345,12 +357,21 @@
     <div class="panel__body" id="vlBody"></div>
   </section>
 
-  <!-- výsledky -->
+  <!-- buildingSMART — výsledky -->
   <section class="vl" id="vlApp" hidden>
     <div class="metastrip" id="vlChips"></div>
     <section class="card result" id="vlSummary"></section>
     <section class="card deep" id="vlDeep"></section>
     <section class="card deep" id="vlRules"></section>
+  </section>
+
+  <!-- IDS — model, špecifikácia a vyhodnotenie -->
+  <section class="vl" id="vlIdsView" hidden>
+    <div class="inputs">
+      <section class="panel panel--check" id="vlIdsModel"></section>
+      <section class="panel panel--check" id="vlIdsSpec"></section>
+    </div>
+    <section class="card deep" id="vlIds"></section>
   </section>
 
 </div>
@@ -481,6 +502,7 @@
 <input type="file" id="fileB" accept=".ifc,.IFC" hidden>
 <input type="file" id="fileV" accept=".ifc,.IFC,.step,.stp" hidden>
 <input type="file" id="fileC" accept=".ifc,.IFC,.step,.stp" hidden>
+<input type="file" id="fileI" accept=".ids,.IDS,.xml" hidden>
 <input type="file" id="fileM" accept=".ifc,.IFC" multiple hidden>
 
 <!-- jadro zlúčenia — načítané aj tu, aby fungoval núdzový režim bez Web Workera -->
@@ -493,7 +515,7 @@
 <!-- rozhrania jednotlivých nástrojov -->
 <script src="js/app.js"></script>
 <script src="js/viewer.js"></script>
-<!-- validácia — hĺbková časť sa dotiahne až na kliknutie (js/validate-pyodide.js) -->
+<!-- validácia — hĺbková časť a IDS sa dotiahnu až na kliknutie (js/validate-pyodide.js) -->
 <script src="js/validate.js"></script>
 <!-- 3D prehliadač — trasa IFC 4.3 a samotný prehliadač (three.js a web-ifc sa dotiahnu až pri použití) -->
 <script src="js/ifc-alignment.js"></script>

@@ -53,3 +53,30 @@ Skript ťahá vetvu `main` oboch repozitárov buildingSMART. Po aktualizácii sa
 prejsť nástroj na testovacom modeli — ak pravidlá pribudnú do súborov, ktoré
 importujú ďalšie knižnice, môže byť potrebné doplniť ich do zoznamu v
 `js/validate-pyodide.js` (funkcia `bootRules`).
+
+## ifctester.zip
+
+Knižnica **IfcTester** z IfcOpenShellu — vyhodnocuje požiadavky zo súboru IDS
+(Information Delivery Specification) v režime **IDS** nástroja validate.
+Súbor **negenerujte ručne** — zostavuje ho skript:
+
+```
+python3 vendor/build-ifctester-bundle.py
+```
+
+Obsah (~35 kB): `ifctester/` (`ids.py`, `facet.py`, `reporter.py`, `__init__.py`,
+`ids.xsd`) z wheelu [ifctester](https://pypi.org/project/ifctester/) na PyPI a
+licenčné texty `COPYING.LESSER` + `COPYING` (LGPL-3.0+) z repozitára
+[IfcOpenShell](https://github.com/IfcOpenShell/IfcOpenShell). Kód sa nemení.
+
+### Prečo nie priamo z PyPI
+
+Wheel má ~25 MB, lebo nesie aj vlastnú webovú aplikáciu IfcTesteru s celým
+Pyodide. Samotná knižnica má desiatky kilobajtov. Jej závislosť `xmlschema` je
+čistý Python a za behu sa inštaluje cez `micropip` z PyPI.
+
+### Aktualizácia
+
+Verzia v skripte (`VERSION`) musí sedieť s wasm zostavou IfcOpenShellu
+(`WHEEL_URL` v `js/validate-pyodide.js`) — IfcTester volá `ifcopenshell.util.*`,
+ktorého API sa medzi verziami mení. Pri zmene jednej treba zmeniť aj druhú.

@@ -3,13 +3,16 @@
  * Vlákno si na požiadanie stiahne Python pre prehliadač (Pyodide) a knižnice
  * preložené do WebAssembly. Súbor sa nikam neodosiela — sťahujú sa len knižnice.
  *
- * Vie dve veci:
+ * Vie tri veci:
  *   validate — ifcopenshell.validate: typy atribútov, kardinality, výčty a
  *              pravidlá WHERE zo schémy EXPRESS (~25 MB);
  *   rules    — normatívne pravidlá buildingSMART (ifc-gherkin-rules) spustené
- *              cez behave nad tým istým modelom (~20 MB navyše).
+ *              cez behave nad tým istým modelom (~20 MB navyše);
+ *   ids      — vyhodnotenie požiadaviek zo súboru IDS knižnicou IfcTester
+ *              (~2 MB navyše).
  *
- * Obe používajú rovnaké jadro ako oficiálna validačná služba buildingSMART.
+ * Prvé dve používajú rovnaké jadro ako oficiálna validačná služba buildingSMART,
+ * tretia rovnakú knižnicu ako IfcTester z IfcOpenShellu.
  * Stiahnuté knižnice zostávajú v pamäti karty, takže ďalší beh je hneď.
  */
 "use strict";
@@ -21,17 +24,24 @@ var WHEEL_URL = "https://ifcopenshell.github.io/wasm-wheels/" +
                 "ifcopenshell-0.8.5-cp313-cp313-pyodide_2025_0_wasm32.whl";
 // balíček pravidiel zostavený skriptom vendor/build-gherkin-bundle.py
 var RULES_ZIP = new URL("../vendor/gherkin-rules.zip", self.location.href).href;
+// knižnica IfcTester zostavená skriptom vendor/build-ifctester-bundle.py
+var IDS_ZIP = new URL("../vendor/ifctester.zip", self.location.href).href;
 
 var MODEL_PATH = "/model.ifc";
 var RULES_DIR = "/gherkin";
 var RULES_OUT = "/rules-out.json";
+var IDS_PATH = "/spec.ids";
+var IDS_DIR = "/ids-lib";
 // koľko nálezov najviac na jedno pravidlo (0 = bez obmedzenia); drží veľkosť
 // výstupu aj čas behu na uzde pri modeloch, kde pravidlo padá na všetkom
 var MAX_OUTCOMES_PER_RULE = 25;
+// koľko nevyhovujúcich prvkov najviac na jednu požiadavku IDS (počet sa hlási celý)
+var MAX_IDS_FAILURES = 200;
 
 var py = null;
 var bootingBase = null;
 var bootingRules = null;
+var bootingIds = null;
 
 function post(msg) { self.postMessage(msg); }
 
@@ -218,6 +228,114 @@ var PY_RULES = [
   "    return _summarize(total_rules, time.time() - t0)"
 ].join("\n");
 
+/* ---- Python: kontrola podľa IDS ----------------------------------------- */
+var PY_IDS = [
+  "import json, os, sys, time, zipfile",
+  "import js",
+  "from pyodide.ffi import to_js",
+  "",
+  "IDS_DIR = " + JSON.stringify(IDS_DIR),
+  "MAX_FAILURES = " + MAX_IDS_FAILURES,
+  "",
+  "def _post(**kw):",
+  "    js.postMessage(to_js(kw, dict_converter=js.Object.fromEntries))",
+  "",
+  "def prepare_ids(zip_path):",
+  "    if not os.path.isdir(IDS_DIR):",
+  "        zipfile.ZipFile(zip_path).extractall(IDS_DIR)",
+  "    if IDS_DIR not in sys.path:",
+  "        sys.path.insert(0, IDS_DIR)",
+  "    import ifctester  # chýbajúca závislosť nech sa ukáže už pri príprave",
+  "",
+  "def _s(v):",
+  "    return None if v is None else str(v)",
+  "",
+  "def _ent(e, reason=None):",
+  "    out = {'id': None, 'cls': None, 'name': None, 'gid': None}",
+  "    try:",
+  "        out['id'] = e.id()",
+  "        out['cls'] = e.is_a()",
+  "    except Exception:",
+  "        pass",
+  "    out['name'] = _s(getattr(e, 'Name', None))",
+  "    out['gid'] = _s(getattr(e, 'GlobalId', None))",
+  "    if reason is not None:",
+  "        out['reason'] = str(reason)",
+  "    return out",
+  "",
+  "# rovnaké delenie ako v reporteri IfcTesteru",
+  "def _cardinality(spec):",
+  "    if spec.minOccurs == 0 and spec.maxOccurs == 0:",
+  "        return 'prohibited'",
+  "    try:",
+  "        return 'required' if int(spec.minOccurs) >= 1 else 'optional'",
+  "    except (TypeError, ValueError):",
+  "        return 'optional'",
+  "",
+  "def run_ids(model_path, ids_path):",
+  "    import ifcopenshell",
+  "    from ifctester import ids as ids_mod",
+  "    from ifctester.ids import IdsXmlValidationError",
+  "    from ifctester.facet import get_pset, get_psets",
+  "",
+  "    _post(type='progress', text='čítam IDS…')",
+  "    try:",
+  "        doc = ids_mod.open(ids_path)",
+  "    except IdsXmlValidationError as e:",
+  "        reason = getattr(e.xml_error, 'reason', None) or str(e.xml_error).strip().split('\\n')[0]",
+  "        raise ValueError('IDS nezodpovedá schéme IDS 1.0: ' + str(reason))",
+  "    except Exception as e:",
+  "        raise ValueError('IDS sa nepodarilo prečítať: ' + str(e).strip().split('\\n')[-1])",
+  "",
+  "    _post(type='progress', text='otváram model…')",
+  "    model = ifcopenshell.open(model_path)",
+  "",
+  "    # to isté, čo robí Ids.validate(), len po jednej špecifikácii kvôli priebehu",
+  "    t0 = time.time()",
+  "    get_pset.cache_clear()",
+  "    get_psets.cache_clear()",
+  "    total = len(doc.specifications)",
+  "    specs = []",
+  "    for i, spec in enumerate(doc.specifications):",
+  "        _post(type='progress', text='špecifikácia ' + (spec.name or ''), done=i, total=total)",
+  "        spec.reset_status()",
+  "        spec.check_ifc_version(model)",
+  "        spec.validate(model)",
+  "        card = _cardinality(spec)",
+  "        prohibited = card == 'prohibited'",
+  "        reqs = []",
+  "        for r in spec.requirements:",
+  "            reqs.append({",
+  "                'facet': type(r).__name__,",
+  "                'text': '' if prohibited else r.to_string('requirement', spec, r),",
+  "                'status': bool(r.status),",
+  "                'fail': len(r.failures),",
+  "                'failures': [_ent(f['element'], f['reason']) for f in r.failures[:MAX_FAILURES]],",
+  "            })",
+  "        applicable = spec.applicable_entities",
+  "        specs.append({",
+  "            'name': spec.name or '',",
+  "            'description': spec.description or '',",
+  "            'instructions': spec.instructions or '',",
+  "            'ifcVersion': spec.ifcVersion if isinstance(spec.ifcVersion, list) else [spec.ifcVersion],",
+  "            'isIfcVersion': bool(spec.is_ifc_version),",
+  "            'cardinality': card,",
+  "            'status': bool(spec.status),",
+  "            'applicability': [a.to_string('applicability', spec) for a in spec.applicability],",
+  "            'applicable': len(applicable),",
+  "            'requirements': reqs,",
+  "            'failed': len(spec.failed_entities),",
+  "            # pri zakázanej špecifikácii je chybou samotný výskyt — vypíšu sa nájdené prvky",
+  "            'found': [_ent(e) for e in applicable[:MAX_FAILURES]] if prohibited else [],",
+  "        })",
+  "    return json.dumps({",
+  "        'info': {k: _s(v) for k, v in doc.info.items()},",
+  "        'schema': model.schema_identifier,",
+  "        'specs': specs,",
+  "        'elapsed': time.time() - t0,",
+  "    }, ensure_ascii=False)"
+].join("\n");
+
 /* ---- príprava prostredia ------------------------------------------------ */
 function bootBase() {
   if (bootingBase) return bootingBase;
@@ -275,6 +393,35 @@ function bootRules() {
   return bootingRules;
 }
 
+function bootIds() {
+  if (bootingIds) return bootingIds;
+  bootingIds = bootBase()
+    .then(function () {
+      post({ type: "progress", text: "sťahujem knižnice pre IDS…" });
+      return py.loadPackage(["numpy"]);
+    })
+    .then(function () {
+      // xmlschema (a s ním elementpath) číta a overuje XML súbor IDS
+      return py.pyimport("micropip").install(["xmlschema"]);
+    })
+    .then(function () {
+      post({ type: "progress", text: "rozbaľujem IfcTester…" });
+      return fetch(IDS_ZIP);
+    })
+    .then(function (r) {
+      if (!r.ok) throw new Error("knižnicu IfcTester sa nepodarilo stiahnuť (" + r.status + ")");
+      return r.arrayBuffer();
+    })
+    .then(function (buf) {
+      py.FS.writeFile("/ifctester.zip", new Uint8Array(buf));
+      py.runPython(PY_IDS);
+      py.runPython('prepare_ids("/ifctester.zip")');
+      post({ type: "progress", text: "IfcTester je pripravený" });
+    })
+    .catch(function (err) { bootingIds = null; throw err; });
+  return bootingIds;
+}
+
 function writeModel(buf) {
   post({ type: "progress", text: "zapisujem súbor do pamäte…" });
   try { py.FS.unlink(MODEL_PATH); } catch (e) { /* prvý beh */ }
@@ -303,6 +450,18 @@ self.onmessage = function (ev) {
       var res = JSON.parse(py.runPython('run_rules("' + MODEL_PATH + '", ' + n + ")"));
       try { py.FS.unlink(MODEL_PATH); } catch (e) { /* nevadí */ }
       post({ type: "rulesResult", data: res, ms: Math.round(res.elapsed * 1000) });
+    });
+  } else if (d.type === "ids") {
+    job = bootIds().then(function () {
+      writeModel(d.buf);
+      d.buf = null;
+      try { py.FS.unlink(IDS_PATH); } catch (e) { /* prvý beh */ }
+      py.FS.writeFile(IDS_PATH, new Uint8Array(d.ids));
+      d.ids = null;
+      var t0 = Date.now();
+      var res = JSON.parse(py.runPython('run_ids("' + MODEL_PATH + '", "' + IDS_PATH + '")'));
+      try { py.FS.unlink(MODEL_PATH); } catch (e) { /* nevadí */ }
+      post({ type: "idsResult", data: res, ms: Date.now() - t0 });
     });
   } else {
     return;
