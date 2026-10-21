@@ -42,6 +42,9 @@
     var D = window.IFCDocs, n = D && D.nameOf ? D.nameOf(t) : null;
     return n || pretty(t);
   }
+  // drobné nastavenia rozhrania si pamätá prehliadač — pri zablokovanom úložisku sa nič nestane
+  function readPref(k, def) { try { var v = localStorage.getItem(k); return v == null ? def : v; } catch (e) { return def; } }
+  function writePref(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* bez úložiska */ } }
   function plural(n, a, b, c) { return n === 1 ? a : (n >= 2 && n <= 4 ? b : c); }
 
   // =========================================================================
@@ -80,6 +83,7 @@
     isolate: null,       // Set "uid:id" — zobrazené len tieto
     colorMode: "file",   // file | model
     ghost: false,
+    sideOpen: readPref("md.side", "1") === "1",   // panel vlastností
     busy: false,
     sec: {
       al: null,          // { m, a } aktívna trasa
@@ -1867,6 +1871,7 @@
 
   function renderSide() {
     var el = $("mdSide"), seq = ++sideSeq;
+    syncToolbar();      // bodka na tlačidle „vlastnosti“, keď je panel skrytý
     if (!st.sel) {
       el.innerHTML = '<div class="dt--empty"><p><b>Kliknite na prvok</b> v 3D pohľade alebo v reze — zobrazia sa jeho atribúty a vlastnosti.</p>' +
         "<p>Ovládanie: ľavé tlačidlo otáča, pravé posúva, koliesko približuje. Dvojklik nastaví stred otáčania.</p>" +
@@ -1944,10 +1949,21 @@
     }
   }
 
+  /* Panel vlastností sa dá skryť — 3D pohľad sa roztiahne (ResizeObserver
+     prepočíta plátno). Voľba sa pamätá medzi návštevami. */
+  function setSide(open) {
+    st.sideOpen = open;
+    writePref("md.side", open ? "1" : "0");
+    document.querySelector(".md__main").classList.toggle("no-side", !open);
+    syncToolbar();
+  }
+
   function syncToolbar() {
     $("mdShowAll").disabled = !st.hidden.size && !st.isolate;
     $("mdShowAll").textContent = "zobraziť všetko" + (st.hidden.size ? " (" + st.hidden.size + " skrytých)" : st.isolate ? " (izolácia)" : "");
     $("mdColor").classList.toggle("is-on", st.colorMode === "model");
+    $("mdSideBtn").classList.toggle("is-on", st.sideOpen);
+    $("mdSideBtn").classList.toggle("has-sel", !st.sideOpen && !!st.sel);
     $("mdGhost").classList.toggle("is-on", st.ghost);
   }
 
@@ -2039,6 +2055,8 @@
       applyMaterials(); syncToolbar(); drawSection();
     });
     $("mdGhost").addEventListener("click", function () { st.ghost = !st.ghost; applyMaterials(); syncToolbar(); });
+    $("mdSideBtn").addEventListener("click", function () { setSide(!st.sideOpen); });
+    $("mdSideX").addEventListener("click", function () { setSide(false); });
     $("mdShowAll").addEventListener("click", function () {
       st.hidden.clear(); st.isolate = null; rebuildIndices(); renderSide(); syncToolbar();
     });
@@ -2082,6 +2100,7 @@
       if (e.key === "Escape") select(null);
       else if ((e.key === "h" || e.key === "H") && st.sel) sideAction("hide");
       else if ((e.key === "i" || e.key === "I") && st.sel) sideAction("iso");
+      else if (e.key === "p" || e.key === "P") setSide(!st.sideOpen);
       else if ((e.key === "f" || e.key === "F")) { if (st.sel) sideAction("focus"); else focusBox(visibleBox()); }
       else if (st.sec.al && (e.key === "PageDown" || e.key === "PageUp")) {
         e.preventDefault(); setStation(st.sec.station + (e.key === "PageDown" ? 1 : -1) * st.sec.step, { keepView: true });
@@ -2179,5 +2198,8 @@
     }
   };
 
-  if ($("mdPanel")) { wire(); renderDrop(); }
+  if ($("mdPanel")) {
+    wire(); renderDrop();
+    if (!st.sideOpen) document.querySelector(".md__main").classList.add("no-side");
+  }
 })();

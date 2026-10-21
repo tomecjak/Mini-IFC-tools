@@ -393,6 +393,7 @@
       <button class="toolbtn" id="mdColor" title="Každý model jednou farbou — na koordináciu">farba podľa modelu</button>
       <button class="toolbtn" id="mdGhost" title="Priehľadné modely — vidno os a rez">priehľadne</button>
       <button class="toolbtn" id="mdShowAll" disabled>zobraziť všetko</button>
+      <button class="toolbtn is-on" id="mdSideBtn" title="Zobraziť / skryť panel vlastností (P)">vlastnosti</button>
     </div>
 
     <div class="md__main">
@@ -400,7 +401,10 @@
       <div class="md__view" id="mdView">
         <div class="md__busy" id="mdBusy" hidden><div class="spinner"></div><span class="md__busyT"></span></div>
       </div>
-      <aside class="vw__side md__side" id="mdSide"></aside>
+      <aside class="vw__side md__side">
+        <button class="md__sideX" id="mdSideX" title="Skryť panel vlastností (P)">skryť ›</button>
+        <div id="mdSide"></div>
+      </aside>
     </div>
   </section>
 
