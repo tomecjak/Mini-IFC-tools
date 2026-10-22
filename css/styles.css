@@ -592,6 +592,14 @@ details.adv[open] > summary::before{content:"–"}
 .vljob{display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--line);padding-top:14px}
 .vljob .help{margin:0}
 
+/* priebeh celej kontroly — krok, ktorý práve beží */
+.chk.is-run .chk__i{border:none;background:none;display:flex;align-items:center;justify-content:center}
+.chk.is-run .chk__t{color:var(--check)}
+.chk .deep__msg{margin-top:6px}
+.chk .pbar{width:100%;margin-top:6px}
+.pipe__foot{display:flex;flex-direction:column;gap:10px;align-items:flex-start;margin-top:14px}
+.pipe__foot .help{margin:0}
+
 /* návod na opravu pri kontrole, ktorá neprešla */
 .chk__fix{
   display:flex;gap:10px;margin-top:8px;padding:8px 10px;

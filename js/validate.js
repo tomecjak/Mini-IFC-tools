@@ -9,8 +9,8 @@
  *   2. hĺbková — spustí sa sama hneď po rýchlej, v js/validate-pyodide.js: ifcopenshell.validate
  *      (typy hodnôt, kardinality, výčty, pravidlá WHERE) a normatívne pravidlá
  *      ifc-gherkin-rules, teda jadro oficiálnej validačnej služby buildingSMART.
- *      Prvé spustenie stiahne ~25 MB a beh trvá dlhšie — výsledky rýchlej
- *      kontroly sa medzitým ukážu hneď.
+ *      Prvé spustenie stiahne ~25 MB a beh trvá dlhšie — kým všetko nedobehne,
+ *      ukazuje sa len priebeh jednotlivých krokov, výsledky potom naraz.
  *
  * IDS — obsahuje model informácie, ktoré požaduje zadávateľ? K modelu sa nahrá
  *   súbor IDS (Information Delivery Specification) a v tom istom vlákne ho
@@ -58,7 +58,8 @@
     busy: null, msg: "", prog: null, err: {}, timer: null, t0: 0,
     queue: [],                                    // kontroly, ktoré sa spustia po tejto
     shown: null,                                  // súbor, ktorého karty výsledkov sú vykreslené
-    autoRun: null                                 // súbor, pre ktorý sa už všetky kontroly spustili samy
+    autoRun: null,                                // súbor, pre ktorý sa už všetky kontroly spustili samy
+    pipe: null                                    // súbor, nad ktorým beží celá kontrola (výsledky čakajú)
   };
 
   // =========================================================================
@@ -129,17 +130,75 @@
     });
   }
 
-  function progress(label, pct) {
+  // Priebeh celej kontroly. Kým beží ktorýkoľvek krok, výsledky sa neukazujú —
+  // vykreslia sa naraz po poslednom kroku (alebo po zrušení či chybe).
+  var STAGES = [
+    { key: "quick", name: "rýchla kontrola", sub: "štruktúra súboru, zápis entít, odkazy, GlobalId" },
+    { key: "validate", name: "hĺbková kontrola schémy", sub: "ifcopenshell.validate — typy, kardinality, výčty, pravidlá WHERE" },
+    { key: "rules", name: "pravidlá buildingSMART", sub: "ifc-gherkin-rules — normatívne pravidlá a odporúčané praktiky" }
+  ];
+  var quickProg = { label: "", pct: null };
+
+  function stageState(key) {
+    if (key === "quick") return st.checks ? "done" : "running";
+    if (st.busy === key) return "running";
+    var s = key === "validate" ? st.deepState : st.rulesState;
+    return s === "done" || s === "error" ? s : "wait";
+  }
+
+  function stageHTML(sg) {
+    var state = stageState(sg.key);
+    var lvl = { done: "ok", error: "bad", wait: "skip", running: "run" }[state];
+    var note = state === "wait" ? "čaká" : state === "error" ? "chyba" : state === "running" ? "beží" :
+               sg.key === "validate" ? "hotovo · " + (st.deepMs / 1000).toFixed(1) + " s" :
+               sg.key === "rules" ? "hotovo · " + (st.rulesMs / 1000).toFixed(0) + " s" : "hotovo";
+    var body = "";
+    if (state === "running") {
+      var pct = sg.key === "quick" ? quickProg.pct
+              : st.prog && st.prog.total ? st.prog.done / st.prog.total : null;
+      body = '<div class="deep__msg">' + esc(sg.key === "quick" ? quickProg.label : st.msg || "pripravujem…") + "</div>" +
+             (pct == null ? "" : '<div class="pbar pbar--chk"><i style="width:' + Math.round(pct * 100) + '%"></i></div>') +
+             (sg.key === "rules" && st.prog && st.prog.total
+               ? '<div class="help">' + st.prog.done + " / " + st.prog.total + " pravidiel</div>" : "") +
+             (sg.key === "quick" ? "" : '<div class="help" id="vlElapsed">beží ' +
+               Math.round((Date.now() - st.t0) / 1000) + " s</div>");
+    } else if (state === "error") {
+      body = '<div class="chk__d">' + esc(st.err[sg.key] || "") + "</div>";
+    }
+    return '<div class="chk is-' + lvl + '">' +
+             (lvl === "run" ? '<span class="chk__i"><span class="spinner"></span></span>'
+                            : '<span class="chk__i">' + ICON[lvl] + "</span>") +
+             '<div class="chk__b">' +
+               '<div class="chk__t">' + esc(sg.name) + '<span class="chk__n">' + esc(note) + "</span></div>" +
+               '<div class="chk__d">' + esc(sg.sub) + "</div>" +
+               body +
+             "</div>" +
+           "</div>";
+  }
+
+  function renderPipeline() {
+    $("vlHead").hidden = false;
+    panel().hidden = false;
+    $("vlApp").hidden = true;
     panel().classList.remove("is-error");
-    setHead("súbor", pct == null ? "načítava sa" : "kontrolujem", pct == null ? "" : Math.round(pct * 100) + " %");
+    var done = STAGES.filter(function (sg) { return stageState(sg.key) === "done"; }).length;
+    setHead("kontrola", st.name, done + " / " + STAGES.length + " hotovo");
     $("vlBody").innerHTML =
-      '<div class="drop drop--busy drop--tall">' +
-        (pct == null ? '<div class="spinner"></div>' : "") +
-        '<div class="drop__main">' + esc(label) + "</div>" +
-        '<div class="drop__hint">' + esc(st.name) + " · " +
-          Math.round(st.size / 1024).toLocaleString("sk-SK") + " kB</div>" +
-        (pct == null ? "" : '<div class="pbar pbar--chk"><i style="width:' + Math.round(pct * 100) + '%"></i></div>') +
+      '<div class="chks">' + STAGES.map(stageHTML).join("") + "</div>" +
+      '<div class="pipe__foot">' +
+        '<p class="help">Výsledky sa zobrazia naraz, keď dobehnú všetky kontroly. Prvé spustenie ' +
+        "stiahne ~25 MB knižníc, väčší model sa môže kontrolovať aj niekoľko minút. Súbor zostáva " +
+        "vo vašom počítači.</p>" +
+        sizeNote(true) +
+        (st.busy ? '<button class="btn btn--sm btn--ghost" id="vlPStop" type="button">zrušiť a ukázať ' +
+                   "doterajšie výsledky</button>" : "") +
       "</div>";
+    if (st.busy) $("vlPStop").addEventListener("click", stopJob);
+  }
+
+  function progress(label, pct) {
+    quickProg = { label: label, pct: pct };
+    renderPipeline();
   }
 
   // Nový model — výsledky oboch druhov kontroly sa týkali predošlého.
@@ -183,7 +242,7 @@
           if (!current()) return;
           st.analyzing = null;
           st.checks = res.checks; st.stats = res.stats;
-          if (st.mode === "bsdd") showResults();
+          if (st.mode === "bsdd") render();
         })
         .catch(function (err) { if (err) fail(err.message); });
     };
@@ -621,12 +680,6 @@
     });
     st.shown = st.file;
     renderBsdd();
-    // hĺbková kontrola aj pravidlá sa spustia samy — pre každý súbor raz; po
-    // zrušení alebo chybe sa znova púšťajú tlačidlom
-    if (st.autoRun !== st.file && !st.busy) {
-      st.autoRun = st.file;
-      runAll();
-    }
   }
 
   function renderBsdd() {
@@ -690,11 +743,20 @@
   // Všetky bežia v tom istom vlákne (Python sa nedá spustiť dvakrát naraz), takže
   // kým jedna beží, ostatné majú tlačidlo vypnuté.
   // pri IDS sa prekreslia aj panely so súbormi — ich tlačidlá počas behu nejdú
-  function renderJobs() { renderBsdd(); renderIds(); }
+  function renderJobs() {
+    if (st.mode === "bsdd" && st.file && st.checks) {
+      if (st.pipe === st.file) renderPipeline();
+      // celá kontrola práve skončila — výsledky sa vykreslia celé nanovo
+      else if (st.shown !== st.file || $("vlApp").hidden) showResults();
+      else renderBsdd();
+    }
+    renderIds();
+  }
 
   // priebeh — prekreslí sa len časť, ktorá práve beží
   function renderBusy() {
-    if (st.busy === "validate") renderDeep();
+    if (st.pipe === st.file && st.mode === "bsdd") renderPipeline();
+    else if (st.busy === "validate") renderDeep();
     else if (st.busy === "rules") renderRules();
     else if (st.busy === "ids") renderIdsJob();
   }
@@ -706,7 +768,7 @@
     st.deep = null; st.deepState = "idle"; st.deepMs = 0;
     st.rules = null; st.rulesState = "idle"; st.rulesMs = 0; st.rulesInfo = null;
     st.ids = null; st.idsState = "idle"; st.idsMs = 0;
-    st.busy = null; st.msg = ""; st.prog = null; st.err = {}; st.queue = [];
+    st.busy = null; st.msg = ""; st.prog = null; st.err = {}; st.queue = []; st.pipe = null;
   }
 
   function tick() {
@@ -746,7 +808,7 @@
     st.queue = [];
     if (st.deepState !== "done") st.queue.push("validate");
     if (st.rulesState !== "done") st.queue.push("rules");
-    if (st.queue.length) startJob(st.queue.shift());
+    if (st.queue.length) { st.pipe = st.file; startJob(st.queue.shift()); }
   }
 
   function startJob(kind) {
@@ -805,14 +867,17 @@
       return;
     }
     if (st.queue.length) startJob(st.queue.shift());
-    else renderJobs();
+    else { st.pipe = null; renderJobs(); }
   }
 
   function failJob(kind, message) {
     clearInterval(st.timer);
-    st.busy = null; st.queue = [];
+    st.busy = null;
     st.err[kind] = message;
     setState(kind, "error");
+    // pri celej kontrole sa pokračuje ďalším krokom — chyba sa ukáže vo výsledkoch
+    if (st.queue.length) { startJob(st.queue.shift()); return; }
+    st.pipe = null;
     renderJobs();
   }
 
@@ -820,7 +885,7 @@
     clearInterval(st.timer);
     engine.stop();       // vlákno sa ukončí, knižnice sa pri ďalšom behu načítajú znova
     setState(st.busy, "idle");
-    st.busy = null; st.msg = ""; st.prog = null; st.queue = [];
+    st.busy = null; st.msg = ""; st.prog = null; st.queue = []; st.pipe = null;
     renderJobs();
   }
 
@@ -1408,7 +1473,15 @@
       return;
     }
     if (!st.file) renderDrop("");
-    else if (st.checks) showResults();
+    else if (st.checks) {
+      // hĺbková kontrola aj pravidlá sa spustia samy — pre každý súbor raz; po
+      // zrušení alebo chybe sa znova púšťajú tlačidlom
+      if (st.autoRun !== st.file && !st.busy) {
+        st.autoRun = st.file;
+        runAll();
+      }
+      if (st.pipe === st.file) renderPipeline(); else showResults();
+    }
     else {
       // rýchla kontrola beží alebo ešte nezačala — ukáže sa jej priebeh
       $("vlHead").hidden = false;
