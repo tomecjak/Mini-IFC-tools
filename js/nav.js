@@ -1,5 +1,6 @@
 /* nav.js — rozcestník nástrojov.
  * Zobrazuje vždy práve jednu sekciu (.view) podľa adresy: #/ , #/merge , #/viewer,
+ * #/validate, #/model,
  * plní hornú lištu (názov nástroja, stavový text, štítok) a obsluhuje tlačidlo
  * na nahratie nových súborov.
  *
@@ -16,7 +17,9 @@
     "viewer": { el: "view-viewer", slug: "code",  cls: "is-code",  title: "Prehliadač IFC kódu",
                 sub: "prehliadač zdrojového kódu", tool: "ViewerTool", reset: "nahrať nový súbor" },
     "validate": { el: "view-validate", slug: "validate", cls: "is-check", title: "Validácia IFC súboru",
-                sub: "kontrola súboru", tool: "ValidateTool", reset: "nahrať iný súbor" }
+                sub: "kontrola súboru", tool: "ValidateTool", reset: "nahrať iný súbor" },
+    "model":  { el: "view-model", slug: "model", cls: "is-model", title: "Prehliadač IFC modelov",
+                sub: "3D prehliadač a koordinácia", tool: "ModelTool", reset: "zavrieť modely" }
   };
 
   var elTool  = document.getElementById("barTool");

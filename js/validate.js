@@ -1,14 +1,22 @@
 /* validate.js — nástroj na kontrolu IFC súboru.
  *
- * Kontrola má dve úrovne:
+ * Dva druhy validácie, prepína sa medzi nimi hore nad nástrojom:
+ *
+ * buildingSMART — je súbor správne zapísaný podľa štandardu IFC?
  *   1. rýchla — beží hneď po nahratí priamo tu v JS nad indexom z js/ifc-code.js:
  *      štruktúra súboru, verzia schémy, zápis entít, čísla entít, referencie,
  *      GlobalId a nepoužité entity;
  *   2. hĺbková — na vyžiadanie, v js/validate-pyodide.js: ifcopenshell.validate
- *      (typy hodnôt, kardinality, výčty, pravidlá WHERE), teda jadro oficiálnej
- *      validačnej služby buildingSMART. Sťahuje sa ~25 MB, preto až na kliknutie.
+ *      (typy hodnôt, kardinality, výčty, pravidlá WHERE) a normatívne pravidlá
+ *      ifc-gherkin-rules, teda jadro oficiálnej validačnej služby buildingSMART.
+ *      Sťahuje sa ~25 MB, preto až na kliknutie.
  *
- * Súbor nikam neodchádza — obe úrovne bežia vo vašom prehliadači.
+ * IDS — obsahuje model informácie, ktoré požaduje zadávateľ? K modelu sa nahrá
+ *   súbor IDS (Information Delivery Specification) a v tom istom vlákne ho
+ *   vyhodnotí knižnica IfcTester z IfcOpenShellu.
+ *
+ * Model je pre oba druhy spoločný — po prepnutí sa nemusí nahrávať znova.
+ * Súbory nikam neodchádzajú — všetko beží vo vašom prehliadači.
  */
 (function () {
   "use strict";
@@ -27,15 +35,20 @@
   var LIST_MAX = 120;        // koľko nálezov sa vypíše (zvyšok len spočíta)
   var COLLECT_MAX = 600;     // koľko sa ich vôbec drží v pamäti
   var BIG_MB = 100;          // nad túto veľkosť sa pri hĺbkovej kontrole varuje
+  var MODE_KEY = "mini-ifc.validate.mode";
 
   var st = {
+    mode: loadMode(),                             // bsdd | ids
     file: null, name: "", size: 0,
+    analyzing: null,                              // súbor, nad ktorým beží rýchla kontrola
     idx: null, checks: null, stats: null,
     deep: null, deepState: "idle", deepMs: 0,     // kontrola podľa schémy
     rules: null, rulesState: "idle", rulesMs: 0,  // normatívne pravidlá
     rulesInfo: null,                              // súhrn behu pravidiel
-    // stavy: idle | running | done | error. Obe kontroly zdieľajú jedno vlákno,
-    // takže naraz beží vždy len jedna — busy hovorí ktorá.
+    idsFile: null, idsMeta: null,                 // súbor IDS a čo sa z neho dá vyčítať hneď
+    ids: null, idsState: "idle", idsMs: 0,        // vyhodnotenie IDS
+    // stavy: idle | running | done | error. Všetky tri kontroly zdieľajú jedno
+    // vlákno, takže naraz beží vždy len jedna — busy hovorí ktorá.
     busy: null, msg: "", prog: null, err: {}, timer: null, t0: 0
   };
 
@@ -57,9 +70,9 @@
       return worker;
     }
     return {
-      run: function (kind, buf, onMsg) {
+      run: function (msg, transfer, onMsg) {
         handler = onMsg;
-        try { boot().postMessage({ type: kind, buf: buf }, [buf]); }
+        try { boot().postMessage(msg, transfer); }
         catch (e) { onMsg({ type: "error", message: e.message }); }
       },
       stop: function () {
@@ -120,28 +133,52 @@
       "</div>";
   }
 
+  // Nový model — výsledky oboch druhov kontroly sa týkali predošlého.
   function handleFile(file) {
     resetJobs();
     st.file = file; st.name = file.name; st.size = file.size;
+    st.idx = null; st.checks = null; st.stats = null; st.analyzing = null;
+    render();
+  }
+
+  // Rýchla kontrola beží len v režime buildingSMART. Model nahratý pri IDS sa
+  // skontroluje až po prepnutí — kontrolu IDS netreba zdržiavať.
+  function analyzeFile() {
+    var file = st.file;
+    st.analyzing = file;
     progress("číta sa súbor…", null);
+    // výsledok z iného súboru alebo z druhého režimu sa len uloží
+    function current() { return st.file === file; }
+    function shown() { return current() && st.mode === "bsdd"; }
+    function fail(msg) {
+      if (!current()) return;
+      st.analyzing = null;
+      // súbor, ktorý sa nedá prečítať, nemá zmysel držať ani pre IDS
+      st.file = null; st.name = ""; st.size = 0;
+      if (st.mode === "bsdd") renderDrop(msg); else render();
+    }
     var reader = new FileReader();
     reader.onload = function () {
-      progress("analyzujem štruktúru súboru…", 0);
+      if (!current()) return;
+      if (shown()) progress("analyzujem štruktúru súboru…", 0);
       var text = reader.result;
-      C.indexFile(text, function (p) { progress("analyzujem štruktúru súboru…", p * 0.6); })
+      C.indexFile(text, function (p) { if (shown()) progress("analyzujem štruktúru súboru…", p * 0.6); })
         .then(function (idx) {
+          if (!current()) throw null;
           st.idx = idx;
           return analyze(idx, text, function (p) {
-            progress("kontrolujem zápis a väzby…", 0.6 + p * 0.4);
+            if (shown()) progress("kontrolujem zápis a väzby…", 0.6 + p * 0.4);
           });
         })
         .then(function (res) {
+          if (!current()) return;
+          st.analyzing = null;
           st.checks = res.checks; st.stats = res.stats;
-          showResults();
+          if (st.mode === "bsdd") showResults();
         })
-        .catch(function (err) { renderDrop(err.message); });
+        .catch(function (err) { if (err) fail(err.message); });
     };
-    reader.onerror = function () { renderDrop("Chyba pri čítaní súboru."); };
+    reader.onerror = function () { fail("Chyba pri čítaní súboru."); };
     reader.readAsText(file);
   }
 
@@ -474,7 +511,7 @@
     $("vlHead").hidden = true;
     panel().hidden = true;
     $("vlApp").hidden = false;
-    if (window.AppBar) AppBar.setStatus(st.name);
+    if (window.AppBar) { AppBar.setStatus(st.name); AppBar.setBadge(""); }
 
     $("vlChips").innerHTML =
       '<div class="m">schéma <b>' + esc(idx.schema) + "</b></div>" +
@@ -515,16 +552,19 @@
       "</div>";
   }
 
-  // ---- spoločná obsluha oboch hĺbkových kontrol -----------------------------
-  // Obe bežia v tom istom vlákne (Python sa nedá spustiť dvakrát naraz), takže
-  // kým jedna beží, druhá má tlačidlo vypnuté.
-  function renderJobs() { renderDeep(); renderRules(); }
+  // ---- spoločná obsluha kontrol vo vlákne -----------------------------------
+  // Všetky bežia v tom istom vlákne (Python sa nedá spustiť dvakrát naraz), takže
+  // kým jedna beží, ostatné majú tlačidlo vypnuté.
+  // pri IDS sa prekreslia aj panely so súbormi — ich tlačidlá počas behu nejdú
+  function renderJobs() { renderDeep(); renderRules(); renderIds(); }
 
+  // výsledky všetkých kontrol vo vlákne — patria k jednému modelu
   function resetJobs() {
     clearInterval(st.timer);
     engine.stop();
     st.deep = null; st.deepState = "idle"; st.deepMs = 0;
     st.rules = null; st.rulesState = "idle"; st.rulesMs = 0; st.rulesInfo = null;
+    st.ids = null; st.idsState = "idle"; st.idsMs = 0;
     st.busy = null; st.msg = ""; st.prog = null; st.err = {};
   }
 
@@ -534,8 +574,8 @@
   }
 
   // Priebeh: pri kontrole podľa schémy vieme ukázať len text, pri pravidlách aj
-  // koľký z 104 predpisov práve beží.
-  function busyHTML(stopId) {
+  // koľký z 104 predpisov práve beží, pri IDS koľká špecifikácia.
+  function busyHTML(stopId, unit) {
     var pct = st.prog && st.prog.total ? Math.round(st.prog.done / st.prog.total * 100) : null;
     return '<div class="deep__body">' +
              '<div class="deep__run"><div class="spinner"></div>' +
@@ -543,28 +583,46 @@
                  '<div class="help" id="vlElapsed">beží 0 s</div>' +
                  (pct == null ? "" :
                    '<div class="pbar pbar--chk"><i style="width:' + pct + '%"></i></div>' +
-                   '<div class="help">' + st.prog.done + " / " + st.prog.total + " pravidiel</div>") +
+                   '<div class="help">' + st.prog.done + " / " + st.prog.total + " " +
+                     (unit || "pravidiel") + "</div>") +
                "</div>" +
                '<button class="btn btn--sm btn--ghost" id="' + stopId + '">zrušiť</button>' +
              "</div>" +
            "</div>";
   }
 
+  function readBuf(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(reader.result); };
+      reader.onerror = function () { reject(new Error("Súbor " + file.name + " sa nepodarilo prečítať.")); };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
   function startJob(kind) {
     if (!st.file || st.busy) return;
+    if (kind === "ids" && !st.idsFile) return;
     st.busy = kind; st.msg = "čítam súbor…"; st.prog = null;
     st.err[kind] = "";
     if (kind === "validate") { st.deepState = "running"; st.deep = null; }
-    else { st.rulesState = "running"; st.rules = null; st.rulesInfo = null; }
+    else if (kind === "rules") { st.rulesState = "running"; st.rules = null; st.rulesInfo = null; }
+    else { st.idsState = "running"; st.ids = null; }
     st.t0 = Date.now();
     renderJobs();
     clearInterval(st.timer);
     st.timer = setInterval(tick, 1000);
 
-    var reader = new FileReader();
-    reader.onload = function () { engine.run(kind, reader.result, onMessage); };
-    reader.onerror = function () { failJob(kind, "Súbor sa nepodarilo prečítať."); };
-    reader.readAsArrayBuffer(st.file);
+    var files = [st.file];
+    if (kind === "ids") files.push(st.idsFile);
+    Promise.all(files.map(readBuf))
+      .then(function (bufs) {
+        if (st.busy !== kind) return;          // medzitým zrušené
+        var msg = { type: kind, buf: bufs[0] };
+        if (kind === "ids") msg.ids = bufs[1];
+        engine.run(msg, bufs, onMessage);
+      })
+      .catch(function (err) { if (st.busy === kind) failJob(kind, err.message); });
   }
 
   function onMessage(msg) {
@@ -588,6 +646,10 @@
       st.rules = ruleChecks(msg.data);
       st.rulesInfo = msg.data;
       st.rulesState = "done";
+    } else if (msg.type === "idsResult") {
+      st.idsMs = msg.ms;
+      st.ids = msg.data;
+      st.idsState = "done";
     } else if (msg.type === "error") {
       if (msg.detail) console.error(msg.detail);
       failJob(kind, msg.message);
@@ -600,16 +662,22 @@
     clearInterval(st.timer);
     st.busy = null;
     st.err[kind] = message;
-    if (kind === "validate") st.deepState = "error"; else st.rulesState = "error";
+    setState(kind, "error");
     renderJobs();
   }
 
   function stopJob() {
     clearInterval(st.timer);
     engine.stop();       // vlákno sa ukončí, knižnice sa pri ďalšom behu načítajú znova
-    if (st.busy === "validate") st.deepState = "idle"; else st.rulesState = "idle";
+    setState(st.busy, "idle");
     st.busy = null; st.msg = ""; st.prog = null;
     renderJobs();
+  }
+
+  function setState(kind, state) {
+    if (kind === "validate") st.deepState = state;
+    else if (kind === "rules") st.rulesState = state;
+    else if (kind === "ids") st.idsState = state;
   }
 
   function errNote(kind) {
@@ -791,12 +859,360 @@
     return [cErr, cWarn, cSkip];
   }
 
+
+  // =========================================================================
+  //  Kontrola podľa IDS
+  // =========================================================================
+  var CARD = { required: "povinná", optional: "voliteľná", prohibited: "zakázaná" };
+  var FACET = { Entity: "trieda", Attribute: "atribút", Property: "vlastnosť",
+                Classification: "klasifikácia", Material: "materiál", PartOf: "súčasť" };
+  var IDS_ICON = '<svg class="drop__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M7 3h7l5 5v12a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M14 3v5h5"/><path d="M9 13l2 2 4-4"/></svg>';
+
+  function kB(n) { return Math.round(n / 1024).toLocaleString("sk-SK") + " kB"; }
+
+  // Súbor IDS sa hneď len prečíta ako XML — názov a počet špecifikácií pomôžu
+  // overiť, že je nahratý ten správny. Vyhodnotenie (aj kontrola voči schéme
+  // IDS 1.0) prebehne až vo vlákne.
+  function handleIds(file) {
+    if (st.busy === "ids") stopJob();
+    st.idsFile = file; st.idsMeta = null;
+    st.ids = null; st.idsState = "idle"; st.err.ids = "";
+    var reader = new FileReader();
+    reader.onload = function () {
+      if (st.idsFile !== file) return;
+      st.idsMeta = idsMeta(reader.result);
+      render();
+    };
+    reader.onerror = function () {
+      if (st.idsFile !== file) return;
+      st.idsMeta = { error: "Súbor sa nepodarilo prečítať." };
+      render();
+    };
+    reader.readAsText(file);
+    render();
+  }
+
+  function idsMeta(text) {
+    var doc;
+    try { doc = new DOMParser().parseFromString(text, "application/xml"); }
+    catch (e) { return { error: "Súbor nie je platné XML." }; }
+    var root = doc.documentElement;
+    if (!root || doc.getElementsByTagName("parsererror").length)
+      return { error: "Súbor nie je platné XML." };
+    if (root.localName !== "ids")
+      return { error: "Toto nie je súbor IDS — koreňový prvok je <" + root.localName + ">, očakáva sa <ids>." };
+    function infoOf(name) {
+      var info = root.getElementsByTagNameNS("*", "info")[0];
+      var el = info && info.getElementsByTagNameNS("*", name)[0];
+      return el ? el.textContent.trim() : "";
+    }
+    var specs = root.getElementsByTagNameNS("*", "specification");
+    var versions = {};
+    for (var i = 0; i < specs.length; i++)
+      (specs[i].getAttribute("ifcVersion") || "").split(/\s+/).forEach(function (v) { if (v) versions[v] = 1; });
+    return {
+      title: infoOf("title"), author: infoOf("author"), version: infoOf("version"),
+      date: infoOf("date"), purpose: infoOf("purpose"), milestone: infoOf("milestone"),
+      description: infoOf("description"),
+      specs: specs.length, versions: Object.keys(versions)
+    };
+  }
+
+  function bindDrop(el, input, onFile) {
+    el.addEventListener("click", function () { $(input).click(); });
+    el.addEventListener("dragover", function (e) { e.preventDefault(); el.classList.add("is-over"); });
+    el.addEventListener("dragleave", function () { el.classList.remove("is-over"); });
+    el.addEventListener("drop", function (e) {
+      e.preventDefault(); el.classList.remove("is-over");
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]);
+    });
+  }
+
+  function idsPanel(tag, title, sub, body) {
+    return '<div class="panel__head"><span class="panel__tag">' + esc(tag) + "</span>" +
+             '<span class="panel__title">' + esc(title) + "</span>" +
+             '<span class="panel__sub">' + esc(sub) + "</span></div>" +
+           '<div class="panel__body">' + body + "</div>";
+  }
+
+  function idsDrop(id, main, hint, icon) {
+    return '<div class="drop" id="' + id + '">' + icon +
+             '<div class="drop__main">' + esc(main) + "</div>" +
+             '<div class="drop__hint">' + hint + "</div></div>";
+  }
+
+  function fileRow(k, v) {
+    return v ? '<div class="idsf__r"><span class="idsf__k">' + esc(k) + "</span><span>" + esc(v) + "</span></div>" : "";
+  }
+
+  function renderIdsInputs() {
+    // model
+    var m = $("vlIdsModel");
+    if (!st.file) {
+      m.innerHTML = idsPanel("model", "nahrajte IFC", ".ifc · .step · .stp",
+        idsDrop("vlIdsMDrop", "presuňte sem model", "alebo kliknite pre výber", UPLOAD_ICON));
+      bindDrop($("vlIdsMDrop"), "fileC", handleFile);
+    } else {
+      var idx = st.idx, schema = idx ? idx.schema : st.ids ? st.ids.schema : "";
+      m.innerHTML = idsPanel("model", st.name, kB(st.size),
+        '<div class="idsf">' +
+          fileRow("schéma", schema) +
+          fileRow("entity", idx ? idx.entityCount.toLocaleString("sk-SK") : "") +
+          (schema ? "" : '<div class="help">model sa prečíta až pri vyhodnotení</div>') +
+        "</div>" +
+        '<div class="idsf__act"><button class="btn btn--sm btn--ghost" id="vlIdsMChg" type="button"' +
+          (st.busy ? " disabled" : "") + ">iný model</button></div>");
+      $("vlIdsMChg").addEventListener("click", function () { $("fileC").click(); });
+    }
+
+    // špecifikácia
+    var p = $("vlIdsSpec"), meta = st.idsMeta;
+    p.classList.toggle("is-error", !!(meta && meta.error));
+    if (!st.idsFile) {
+      p.innerHTML = idsPanel("ids", "nahrajte IDS", ".ids · .xml",
+        idsDrop("vlIdsSDrop", "presuňte sem súbor IDS", "alebo kliknite pre výber · <b>IDS 1.0</b> od buildingSMART", IDS_ICON));
+      bindDrop($("vlIdsSDrop"), "fileI", handleIds);
+      return;
+    }
+    var body;
+    if (!meta) body = '<div class="help">čítam súbor…</div>';
+    else if (meta.error) body = '<div class="note note--bad"><span class="note__i">✕</span><span>' + esc(meta.error) + "</span></div>";
+    else body =
+      '<div class="idsf">' +
+        fileRow("názov", meta.title || "bez názvu") +
+        fileRow("špecifikácie", String(meta.specs)) +
+        fileRow("schémy", meta.versions.join(" · ")) +
+        fileRow("autor", meta.author) +
+        fileRow("verzia", meta.version) +
+        fileRow("dátum", meta.date) +
+        fileRow("fáza", meta.milestone) +
+        fileRow("účel", meta.purpose) +
+        (meta.description ? '<div class="idsf__d">' + esc(meta.description) + "</div>" : "") +
+      "</div>";
+    p.innerHTML = idsPanel("ids", st.idsFile.name, kB(st.idsFile.size), body +
+      '<div class="idsf__act"><button class="btn btn--sm btn--ghost" id="vlIdsSChg" type="button"' +
+        (st.busy === "ids" ? " disabled" : "") + ">iný súbor IDS</button></div>");
+    $("vlIdsSChg").addEventListener("click", function () { $("fileI").click(); });
+  }
+
+  function renderIdsJob() {
+    var box = $("vlIds");
+    var meta = st.idsMeta;
+
+    if (st.busy === "ids") {
+      box.innerHTML = '<div class="card__head">vyhodnotenie IDS</div>' + busyHTML("vlIStop", "špecifikácií");
+      $("vlIStop").addEventListener("click", stopJob);
+      return;
+    }
+
+    if (st.idsState === "done" && st.ids) {
+      box.innerHTML = idsResultHTML(st.ids);
+      $("vlIRun").addEventListener("click", function () { startJob("ids"); });
+      return;
+    }
+
+    var ready = st.file && st.idsFile && meta && !meta.error;
+    var why = !st.file && !st.idsFile ? "nahrajte model a súbor IDS"
+            : !st.file ? "nahrajte model" : !st.idsFile ? "nahrajte súbor IDS"
+            : !meta ? "čítam súbor IDS…" : meta.error ? "súbor IDS sa nedá použiť" : "";
+    box.innerHTML =
+      '<div class="card__head">vyhodnotenie IDS</div>' +
+      '<div class="deep__body">' +
+        "<p class=\"help\">Každá <b>špecifikácia</b> v IDS hovorí, na ktoré prvky modelu sa vzťahuje " +
+        "(napr. všetky steny) a čo musia mať (atribút, vlastnosť v property sete, klasifikáciu, " +
+        "materiál, zaradenie). Vyhodnotí ich <b>IfcTester</b> z IfcOpenShellu a pri každej " +
+        "požiadavke vypíše prvky, ktoré ju nespĺňajú.</p>" +
+        errNote("ids") + (st.file ? sizeNote(false) : "") +
+        '<div class="dlrow">' +
+          '<button class="btn btn--sm" id="vlIRun"' + (ready && !st.busy ? "" : " disabled") +
+            '>vyhodnotiť IDS <span class="btn__arr">→</span></button>' +
+          '<span class="mergehint">' + (why ? esc(why) + " · " : "") +
+            "prvé spustenie stiahne ~25 MB knižnice · súbory zostávajú vo vašom počítači</span>" +
+        "</div>" +
+      "</div>";
+    $("vlIRun").addEventListener("click", function () { startJob("ids"); });
+  }
+
+  // Úroveň špecifikácie: mimo schémy modelu sa nevyhodnocuje (IDS ju obmedzuje
+  // atribútom ifcVersion), inak rozhoduje výsledok z IfcTesteru.
+  function specLevel(sp) {
+    if (!sp.isIfcVersion) return "skip";
+    return sp.status ? "ok" : "bad";
+  }
+
+  function specNote(sp, level) {
+    if (level === "skip") return "mimo schémy modelu";
+    var n = sp.applicable;
+    var prv = function (k) { return k.toLocaleString("sk-SK") + " " + plural(k, "prvok", "prvky", "prvkov"); };
+    if (sp.cardinality === "prohibited")
+      return n ? prv(n) + " v modeli, hoci nesmú byť" : "žiadny zakázaný prvok";
+    if (!n) return sp.cardinality === "required" ? "v modeli sa nenašiel žiadny prvok" : "netýka sa žiadneho prvku";
+    if (!sp.failed) return prv(n) + " · všetky vyhovujú";
+    return sp.failed.toLocaleString("sk-SK") + " z " + prv(n) + " nevyhovuje";
+  }
+
+  function entLine(e) {
+    return "#" + e.id + " " + (e.cls || "") + (e.name ? " „" + e.name + "“" : "");
+  }
+
+  function entItems(list, total, withReason) {
+    var c = chk("", "", "");
+    list.forEach(function (e) {
+      add(c, entLine(e) + (withReason && e.reason ? " — " + e.reason : ""), -1,
+          entLine(e) + (e.gid ? "\nGlobalId " + e.gid : "") + (e.reason ? "\n" + e.reason : ""), e.id);
+    });
+    c.total = Math.max(total, c.total);
+    return itemsHTML(c);
+  }
+
+  function specHTML(sp, data) {
+    var level = specLevel(sp);
+    var meta = [CARD[sp.cardinality] || sp.cardinality];
+    if (sp.applicability.length) meta.push("platí pre: " + sp.applicability.join(" · "));
+    meta.push(sp.ifcVersion.join(" · "));
+
+    var body = "";
+    if (sp.description) body += '<div class="chk__d">' + esc(sp.description) + "</div>";
+    if (sp.instructions) body += '<div class="chk__d"><i>pokyn:</i> ' + esc(sp.instructions) + "</div>";
+    body += '<div class="ids__meta">' + esc(meta.join("  ·  ")) + "</div>";
+
+    if (level === "skip") {
+      body += '<div class="chk__d">Špecifikácia platí pre ' + esc(sp.ifcVersion.join(", ")) +
+              ", model je v schéme " + esc(data.schema) + " — nevyhodnocuje sa.</div>";
+    } else if (sp.cardinality === "prohibited") {
+      if (sp.applicable) body += entItems(sp.found, sp.applicable, false);
+    } else if (sp.requirements.length) {
+      body += '<ul class="ids__reqs">' + sp.requirements.map(function (r) {
+        // bez vyhovujúcich prvkov sa požiadavka nemala na čom overiť
+        var rl = !sp.applicable ? "skip" : r.status ? "ok" : "bad";
+        return '<li class="is-' + rl + '">' +
+                 '<div class="ids__rh"><span class="ids__ri">' + ICON[rl] + "</span>" +
+                   '<span class="ids__ft">' + esc(FACET[r.facet] || r.facet) + "</span>" +
+                   "<span>" + esc(r.text) + "</span>" +
+                   (r.fail ? '<span class="chk__n">' + r.fail.toLocaleString("sk-SK") + " " +
+                             plural(r.fail, "nevyhovuje", "nevyhovujú", "nevyhovuje") + "</span>" : "") +
+                 "</div>" +
+                 (r.fail ? entItems(r.failures, r.fail, true) : "") +
+               "</li>";
+      }).join("") + "</ul>";
+    }
+
+    return '<div class="chk is-' + level + '">' +
+             '<span class="chk__i">' + ICON[level] + "</span>" +
+             '<div class="chk__b">' +
+               '<div class="chk__t">' + esc(sp.name || "bez názvu") +
+                 '<span class="chk__n">' + esc(specNote(sp, level)) + "</span></div>" +
+               body +
+             "</div>" +
+           "</div>";
+  }
+
+  function idsResultHTML(data) {
+    var specs = data.specs || [];
+    var cnt = { ok: 0, bad: 0, skip: 0 }, elems = 0, failed = 0;
+    specs.forEach(function (sp) {
+      var l = specLevel(sp);
+      cnt[l]++;
+      if (l === "skip") return;
+      elems += sp.applicable;
+      failed += sp.cardinality === "prohibited" ? sp.applicable : sp.failed;
+    });
+    var title = (data.info && data.info.title) || (st.idsFile && st.idsFile.name) || "IDS";
+    return '<div class="result__head"><h2>vyhodnotenie IDS</h2>' +
+             (cnt.bad ? '<span class="badge badge--bad">nesplnené</span>'
+              : cnt.ok ? '<span class="badge badge--ok">splnené</span>'
+              : '<span class="badge badge--warn">nič na vyhodnotenie</span>') +
+             '<span class="result__size">' + (st.idsMs / 1000).toFixed(1) + " s</span></div>" +
+           '<div class="result__body">' +
+             '<div class="ids__title">' + esc(title) + '<span class="chk__n">model ' +
+               esc(st.name) + " · " + esc(data.schema) + "</span></div>" +
+             '<div class="stats">' +
+               statHTML("špecifikácie", String(specs.length)) +
+               statHTML("splnené", String(cnt.ok)) +
+               statHTML("nesplnené", String(cnt.bad)) +
+               (cnt.skip ? statHTML("mimo schémy", String(cnt.skip)) : "") +
+               statHTML("overené prvky", elems.toLocaleString("sk-SK")) +
+               statHTML("nevyhovujúce", failed.toLocaleString("sk-SK")) +
+             "</div>" +
+             (specs.length ? '<div class="chks">' + specs.map(function (sp) { return specHTML(sp, data); }).join("") + "</div>"
+                           : '<div class="note"><span class="note__i">i</span><span>IDS neobsahuje žiadnu špecifikáciu.</span></div>') +
+             '<div class="dlrow">' +
+               '<button class="btn btn--sm btn--ghost" id="vlIRun"' + (st.busy ? " disabled" : "") +
+                 ">vyhodnotiť znova</button>" +
+               '<span class="mergehint">IfcTester · texty požiadaviek a dôvodov sú v angličtine, ' +
+                 "ako ich vracia knižnica · najviac 200 prvkov na požiadavku</span>" +
+             "</div>" +
+           "</div>";
+  }
+
+  function renderIds() {
+    renderIdsInputs();
+    renderIdsJob();
+  }
+
+  // =========================================================================
+  //  Prepínanie druhu kontroly
+  // =========================================================================
+  function loadMode() {
+    try { return localStorage.getItem(MODE_KEY) === "ids" ? "ids" : "bsdd"; }
+    catch (e) { return "bsdd"; }
+  }
+
+  function setMode(mode) {
+    if (mode === st.mode) return;
+    st.mode = mode;
+    try { localStorage.setItem(MODE_KEY, mode); } catch (e) { /* nevadí */ }
+    render();
+  }
+
+  function render() {
+    var ids = st.mode === "ids";
+    Array.prototype.forEach.call($("vlMode").querySelectorAll(".vlmode__b"), function (b) {
+      var on = b.getAttribute("data-mode") === st.mode;
+      b.classList.toggle("is-on", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    $("vlIdsView").hidden = !ids;
+    if (ids) {
+      $("vlHead").hidden = false;
+      panel().hidden = true;
+      $("vlApp").hidden = true;
+      syncBar();
+      renderIds();
+      return;
+    }
+    if (!st.file) renderDrop("");
+    else if (st.checks) showResults();
+    else {
+      // rýchla kontrola beží alebo ešte nezačala — ukáže sa jej priebeh
+      $("vlHead").hidden = false;
+      panel().hidden = false;
+      $("vlApp").hidden = true;
+      syncBar();
+      if (st.analyzing !== st.file) analyzeFile();
+    }
+  }
+
+  function syncBar() {
+    if (!window.AppBar) return;
+    AppBar.setStatus(st.file ? st.name : "kontrola súboru");
+    AppBar.setBadge(st.mode === "ids" ? "IDS" : "");
+  }
+
   // =========================================================================
   //  Prepojenie na rozhranie
   // =========================================================================
   $("fileC").addEventListener("change", function (e) {
     if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
     e.target.value = "";
+  });
+  $("fileI").addEventListener("change", function (e) {
+    if (e.target.files && e.target.files[0]) handleIds(e.target.files[0]);
+    e.target.value = "";
+  });
+  $("vlMode").addEventListener("click", function (e) {
+    var b = e.target.closest(".vlmode__b");
+    if (b) setMode(b.getAttribute("data-mode"));
   });
 
   /* Preklik nálezu do prehliadača kódu. Otvorí sa ten istý súbor a v ňom entita,
@@ -816,25 +1232,24 @@
     });
   }
 
-  $("vlApp").addEventListener("click", function (e) {
+  function onFinding(e) {
     var li = e.target.closest("li.is-link");
     if (!li) return;
     openInCode(+li.getAttribute("data-goid"), +li.getAttribute("data-goline"));
-  });
+  }
+  $("vlApp").addEventListener("click", onFinding);
+  $("vlIds").addEventListener("click", onFinding);
 
   window.ValidateTool = {
-    syncBar: function () {
-      if (!window.AppBar) return;
-      AppBar.setStatus(st.idx ? st.name : "kontrola súboru");
-      AppBar.setBadge("");
-    },
+    syncBar: syncBar,
     reset: function () {
       resetJobs();
-      st.file = null; st.name = ""; st.size = 0; st.idx = null;
+      st.file = null; st.name = ""; st.size = 0; st.idx = null; st.analyzing = null;
       st.checks = null; st.stats = null;
-      renderDrop("");
+      st.idsFile = null; st.idsMeta = null;
+      render();
     }
   };
 
-  renderDrop("");
+  render();
 })();

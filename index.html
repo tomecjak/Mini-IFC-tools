@@ -8,6 +8,16 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/styles.css">
+<!-- knižnice 3D prehliadača — sťahujú sa až pri prvom otvorení modelu (js/model.js) -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+    "web-ifc": "https://cdn.jsdelivr.net/npm/web-ifc@0.0.77/web-ifc-api.js"
+  }
+}
+</script>
 </head>
 <body>
 
@@ -40,12 +50,13 @@
 
   <section class="hero">
     <div class="card hero__main">
-      <div class="kicker kicker--sec">// lokálne IFC nástroje</div>
-      <h1>Edituj IFC modely priamo<br>vo svojom prehliadači.</h1>
-      <p class="lede">Nástroje pracujú s textovou podobou IFC (STEP / ISO-10303-21). Súbory sa  nikam neukladajú — zlučovanie, editácia aj validácia bežia len vo vašom prehliadači.</p>
+      <div class="kicker kicker--sec">// lokálne nástroje</div>
+      <h1>Upravuj IFC súbory<br>priamo v prehliadači.</h1>
+      <p class="lede">Nástroje pracujú s textovou podobou IFC (STEP / ISO-10303-21). Súbory sa nikam neukladajú — prehliadanie v 3D, editácia, zlučovanie aj kontrola bežia len vo vašom prehliadači.</p>
       <div class="facts">
         <div class="fact"><div class="fact__k">Schémy</div><div class="fact__v">2x3 · 4 · 4.3</div></div>
         <div class="fact"><div class="fact__k">Limit</div><div class="fact__v">~200 MB</div></div>
+        <div class="fact"><div class="fact__k">Trasy</div><div class="fact__v">IfcAlignment</div></div>
         <div class="fact"><div class="fact__k">Upload</div><div class="fact__v is-ok">žiadny</div></div>
       </div>
     </div>
@@ -64,23 +75,24 @@
   <div class="note note--warn note--mobile">Nástroje sú stavané na desktop — na telefóne si ich viete pozrieť, ale prácu s modelom robte na počítači.</div>
 
   <section class="tools">
-    <a class="tool tool--merge" href="#/merge">
+    <a class="tool tool--model" href="#/model">
       <div class="tool__b">
         <div class="tool__h">
           <span class="tool__no">[01]</span>
-          <span class="tool__name">merge</span>
-          <span class="tool__sub">zlúčenie modelov</span>
+          <span class="tool__name">model</span>
+          <span class="tool__sub">3D prehliadač a koordinácia</span>
         </div>
-        <p>Primárny model si drží stavebnú štruktúru, zo sekundárneho pridáte vybrané objekty s geometriou, umiestnením, materiálmi a property setmi.</p>
+        <p>Model v 3D — aj viac súborov naraz v spoločných súradniciach projektu. Pre IFC 4.3 vykreslí os trasy (IfcAlignment) so staničením a urobí priečne rezy v ľubovoľnom staničení.</p>
         <ul class="tool__list">
-          <li>výber objektov po triedach</li>
-          <li>rebase na cieľové podlažie + manuálny posun</li>
-          <li>validácia výstupu pred stiahnutím</li>
+          <li>viac modelov naraz, farba podľa modelu</li>
+          <li>triedy, skrytie, izolácia, vlastnosti</li>
+          <li>trasa IFC 4.3 a staničenie</li>
+          <li>priečne rezy, pozdĺžny profil, export do DXF</li>
+          <li>terén a ortofotomapa ČÚZK / ZBGIS</li>
         </ul>
       </div>
-      <span class="tool__go">otvoriť merge <span class="tool__arr">→</span></span>
+      <span class="tool__go">otvoriť model <span class="tool__arr">→</span></span>
     </a>
-
     <a class="tool tool--view" href="#/viewer">
       <div class="tool__b">
         <div class="tool__h">
@@ -105,21 +117,38 @@
           <span class="tool__name">validate</span>
           <span class="tool__sub">kontrola súboru</span>
         </div>
-        <p>Rýchla kontrola zápisu a väzieb hneď po nahratí. Na vyžiadanie aj hĺbková kontrola podľa schémy EXPRESS a 104 normatívnych pravidiel — tým istým jadrom, ktoré poháňa validačnú službu buildingSMART.</p>
+        <p>Dve validácie. Podľa buildingSMART — zápis, schéma EXPRESS a 104 normatívnych pravidiel tým istým jadrom, ktoré poháňa validačnú službu buildingSMART. Podľa IDS — vyhodnotenie požiadaviek zadávateľa na informácie v modeli.</p>
         <ul class="tool__list">
           <li>štruktúra, čísla entít, GlobalId</li>
-          <li>visiace odkazy a nepoužité entity</li>
           <li>typy atribútov a pravidlá WHERE</li>
           <li>Implementer Agreements a praktiky</li>
+          <li>IDS: triedy, vlastnosti, klasifikácie</li>
         </ul>
       </div>
       <span class="tool__go">otvoriť validate <span class="tool__arr">→</span></span>
     </a>
+    <a class="tool tool--merge" href="#/merge">
+      <div class="tool__b">
+        <div class="tool__h">
+          <span class="tool__no">[04]</span>
+          <span class="tool__name">merge</span>
+          <span class="tool__sub">zlúčenie modelov</span>
+        </div>
+        <p>Primárny model si drží stavebnú štruktúru, zo sekundárneho pridáte vybrané objekty s geometriou, umiestnením, materiálmi a property setmi.</p>
+        <ul class="tool__list">
+          <li>výber objektov po triedach</li>
+          <li>rebase na cieľové podlažie + manuálny posun</li>
+          <li>validácia výstupu pred stiahnutím</li>
+        </ul>
+      </div>
+      <span class="tool__go">otvoriť merge <span class="tool__arr">→</span></span>
+    </a>
+
   </section>
 
 </div>
 
-<!-- ======================= NÁSTROJ 1 — ZLÚČENIE ======================= -->
+<!-- ======================= NÁSTROJ 4 — ZLÚČENIE ======================= -->
 <div class="sheet view" id="view-merge">
 
   <section class="card toolhead" id="mgHead">
@@ -303,10 +332,22 @@
   <section class="card toolhead" id="vlHead">
     <div class="kicker kicker--chk">// kontrola kvality</div>
     <h1>Validácia IFC súboru</h1>
-    <p class="lede">Tri úrovne kontroly. <b>Rýchla</b> prebehne hneď po nahratí — štruktúra súboru, verzia schémy, zápis entít, duplicitné čísla a GlobalId, visiace odkazy. <b>Hĺbková</b> použije jadro <b>ifcopenshell.validate</b>: dátové typy atribútov, kardinality, výčty a pravidlá WHERE zo schémy EXPRESS. <b>Normatívne pravidlá</b> spustia 104 predpisov z <b>ifc-gherkin-rules</b> — Implementer Agreements a Informal Propositions. Posledné dve sa spúšťajú tlačidlom, lebo si stiahnu knižnice validačnej služby buildingSMART. Súbor sa nikam neodosiela.</p>
+    <p class="lede">Dva spôsoby kontroly. <b>buildingSMART</b> overí, či je súbor správne zapísaný podľa štandardu IFC — rýchla kontrola zápisu a väzieb hneď po nahratí, na vyžiadanie hĺbková kontrola podľa schémy EXPRESS (<b>ifcopenshell.validate</b>) a 104 normatívnych pravidiel z <b>ifc-gherkin-rules</b>. <b>IDS</b> overí, či model obsahuje informácie, ktoré od neho požaduje zadávateľ — triedy, atribúty, vlastnosti, klasifikácie a materiály podľa súboru <b>IDS</b> (Information Delivery Specification). Súbory sa nikam neodosielajú.</p>
   </section>
 
-  <!-- nahranie súboru -->
+  <!-- výber druhu kontroly -->
+  <nav class="vlmode" id="vlMode" aria-label="Druh kontroly">
+    <button class="vlmode__b" type="button" data-mode="bsdd">
+      <span class="vlmode__t">buildingSMART</span>
+      <span class="vlmode__s">zápis, schéma IFC a normatívne pravidlá</span>
+    </button>
+    <button class="vlmode__b" type="button" data-mode="ids">
+      <span class="vlmode__t">IDS</span>
+      <span class="vlmode__s">požiadavky na informácie zo súboru .ids</span>
+    </button>
+  </nav>
+
+  <!-- buildingSMART — nahranie súboru -->
   <section class="panel panel--check" id="vlPanel">
     <div class="panel__head">
       <span class="panel__tag">súbor</span>
@@ -316,12 +357,133 @@
     <div class="panel__body" id="vlBody"></div>
   </section>
 
-  <!-- výsledky -->
+  <!-- buildingSMART — výsledky -->
   <section class="vl" id="vlApp" hidden>
     <div class="metastrip" id="vlChips"></div>
     <section class="card result" id="vlSummary"></section>
     <section class="card deep" id="vlDeep"></section>
     <section class="card deep" id="vlRules"></section>
+  </section>
+
+  <!-- IDS — model, špecifikácia a vyhodnotenie -->
+  <section class="vl" id="vlIdsView" hidden>
+    <div class="inputs">
+      <section class="panel panel--check" id="vlIdsModel"></section>
+      <section class="panel panel--check" id="vlIdsSpec"></section>
+    </div>
+    <section class="card deep" id="vlIds"></section>
+  </section>
+
+</div>
+
+<!-- ======================= NÁSTROJ 1 — 3D MODEL A KOORDINÁCIA ======================= -->
+<div class="sheet view" id="view-model">
+
+  <section class="card toolhead" id="mdHead">
+    <div class="kicker kicker--mod">// 3d · koordinácia · ifc 4.3</div>
+    <h1>Prehliadač IFC modelov</h1>
+    <p class="lede">Model v 3D — <b>aj viac súborov naraz</b>, umiestnených v spoločných súradniciach projektu, aby sa dali skontrolovať kolízie a nadväznosti profesií. Pri <b>IFC 4.3</b> sa vykreslí os trasy (<code>IfcAlignment</code>) so staničením a v ľubovoľnom staničení sa urobí <b>priečny rez</b> cez všetky načítané modely. Súbory zostávajú vo vašom počítači — z internetu sa sťahujú len knižnice three.js a web-ifc.</p>
+  </section>
+
+  <!-- nahranie súborov -->
+  <section class="panel panel--model" id="mdPanel">
+    <div class="panel__head">
+      <span class="panel__tag">modely</span>
+      <span class="panel__title" id="mdTitle">nahrajte jeden alebo viac IFC</span>
+      <span class="panel__sub">.ifc · IFC2x3 · IFC4 · IFC4.3</span>
+    </div>
+    <div class="panel__body" id="mdBody"></div>
+  </section>
+
+  <!-- prehliadač -->
+  <section class="md" id="mdApp" hidden>
+    <div class="metastrip" id="mdChips"></div>
+    <div class="note note--bad md__err" id="mdErr" hidden></div>
+
+    <div class="vw__tools md__tools">
+      <div class="vw__search md__search">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+        <input id="mdQ" type="search" placeholder="hľadať názov, triedu, GlobalId, #ID…" autocomplete="off" spellcheck="false">
+        <span class="vw__hits" id="mdHits"></span>
+      </div>
+      <button class="toolbtn" id="mdAdd">+ pridať model</button>
+      <span class="md__sep"></span>
+      <button class="toolbtn" id="mdFit" title="Celý model (F)">celok</button>
+      <button class="toolbtn" id="mdIso" title="Axonometria">3D</button>
+      <button class="toolbtn" id="mdTop" title="Pôdorys — sever hore">zhora</button>
+      <span class="md__sep"></span>
+      <button class="toolbtn" id="mdColor" title="Každý model jednou farbou — na koordináciu">farba podľa modelu</button>
+      <button class="toolbtn" id="mdGhost" title="Priehľadné modely — vidno os a rez">priehľadne</button>
+      <details class="pop md-geo" id="mdGeo">
+        <summary id="mdGeoBtn" title="Terén, ortofotomapa a mapa pod modelom (ČÚZK, ZBGIS)">terén a mapa</summary>
+        <div class="pop__body md-geo__body" id="mdGeoBody"></div>
+      </details>
+      <button class="toolbtn" id="mdShowAll" disabled>zobraziť všetko</button>
+      <button class="toolbtn is-on" id="mdSideBtn" title="Zobraziť / skryť panel vlastností (P)">vlastnosti</button>
+    </div>
+
+    <div class="md__main">
+      <aside class="md__left" id="mdLeft"></aside>
+      <div class="md__view" id="mdView">
+        <div class="md__busy" id="mdBusy" hidden><div class="spinner"></div><span class="md__busyT"></span></div>
+      </div>
+      <aside class="vw__side md__side">
+        <button class="md__sideX" id="mdSideX" title="Skryť panel vlastností (P)">skryť ›</button>
+        <div id="mdSide"></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- priečne rezy po trase -->
+  <section class="card sec" id="mdSec" hidden>
+    <div class="sec__bar">
+      <span class="sec__tag">rez</span>
+      <select id="secAl" title="trasa"></select>
+      <span class="seg" role="group" aria-label="zobrazenie">
+        <button class="seg__b is-on" id="secModeX" title="Priečny rez v staničení">priečny rez</button><button class="seg__b" id="secModeL" title="Pozdĺžny profil celej trasy — niveleta a prienik modelov s plochou pozdĺž osi">pozdĺžny profil</button>
+      </span>
+      <span class="sec__lbl">km</span>
+      <input id="secSt" class="sec__st" type="text" spellcheck="false" autocomplete="off" title="Staničenie — napr. 1,250.5 alebo 1+250.5 alebo metre 1250.5; potvrďte Enter">
+      <button class="iconbtn sec__ib" id="secSnapP" title="Predchádzajúce okrúhle staničenie">«</button>
+      <button class="iconbtn sec__ib" id="secPrev" title="O krok späť (PageUp)">‹</button>
+      <button class="iconbtn sec__ib" id="secNext" title="O krok vpred (PageDown)">›</button>
+      <button class="iconbtn sec__ib" id="secSnapN" title="Nasledujúce okrúhle staničenie">»</button>
+      <label class="sec__lbl">krok
+        <select id="secStep"><option>1</option><option>5</option><option>10</option><option selected>20</option><option>25</option><option>50</option><option>100</option></select> m</label>
+      <label class="sec__lbl" id="secWidthL">šírka
+        <select id="secWidth"><option value="0" selected>celá</option><option value="5">±5 m</option><option value="10">±10 m</option><option value="20">±20 m</option><option value="50">±50 m</option><option value="100">±100 m</option></select></label>
+      <label class="sec__lbl" id="secExagL" hidden title="Koľkokrát sa výšky zväčšia oproti dĺžkam">prevýšenie
+        <select id="secExag"><option>1</option><option>2</option><option>5</option><option selected>10</option><option>20</option><option>50</option></select>×</label>
+      <label class="sec__lbl">3D
+        <select id="secClip"><option value="none" selected>bez orezu</option><option value="ahead">skryť pred rezom</option><option value="behind">skryť za rezom</option><option value="band">len pás ±5 m</option></select></label>
+      <button class="toolbtn" id="secLook" title="Kamera v osi trasy, pohľad v smere staničenia">pohľad do rezu</button>
+      <span class="md__gap"></span>
+      <button class="toolbtn" id="secSvg" title="Výkres v metroch 1 : 1, hladina pre každú triedu IFC">rez do DXF ↓</button>
+      <button class="iconbtn sec__ib" id="secClose" title="Zavrieť rezy">×</button>
+    </div>
+    <input id="secRange" class="sec__range" type="range" min="0" max="1" step="0.001" value="0" title="Staničenie">
+    <div class="sec__main">
+      <div class="sec__wrap" id="secWrap">
+        <canvas id="secCanvas"></canvas>
+        <span class="sec__cur" id="secCursor"></span>
+        <button class="minibtn sec__fit" id="secFit" title="Celý rez (dvojklik)">celý rez</button>
+      </div>
+      <aside class="sec__info">
+        <div id="secInfo"></div>
+        <details class="sec__ser" id="secSerBox">
+          <summary>séria rezov do DXF</summary>
+          <div class="sec__serB">
+            <label>od km <input id="secFrom" type="text" spellcheck="false"></label>
+            <label>do km <input id="secTo" type="text" spellcheck="false"></label>
+            <label>každých <select id="secEvery"><option>5</option><option>10</option><option selected>20</option><option>25</option><option>50</option><option>100</option></select> m</label>
+            <label class="radio radio--flat"><input type="checkbox" id="secEnds" checked><span>pridať aj koncové staničenie</span></label>
+            <button class="btn btn--sm" id="secSer">exportovať sériu ↓</button>
+            <div class="help" id="secSerMsg">Rezy sa uložia do jedného DXF (metre 1 : 1), po dvoch vedľa seba, každý vo vlastnom ráme s popisom výšok.</div>
+          </div>
+        </details>
+      </aside>
+    </div>
+    <div class="sec__help"><b>Klávesy v 3D:</b> H skryť · I izolovať · F priblížiť · Esc zrušiť výber · PageUp / PageDown posun rezu o krok. Pozdĺžny profil je rozvinutá zvislá plocha pozdĺž osi trasy — kliknutím v ňom sa nastaví staničenie priečneho rezu. Rez je zvislá rovina kolmá na os v danom staničení; pohľad v smere staničenia (vľavo / vpravo podľa smeru trasy), výšky v metroch. Koliesko približuje, ťahaním sa posúva, klik vyberie prvok.</div>
   </section>
 
 </div>
@@ -340,6 +502,8 @@
 <input type="file" id="fileB" accept=".ifc,.IFC" hidden>
 <input type="file" id="fileV" accept=".ifc,.IFC,.step,.stp" hidden>
 <input type="file" id="fileC" accept=".ifc,.IFC,.step,.stp" hidden>
+<input type="file" id="fileI" accept=".ids,.IDS,.xml" hidden>
+<input type="file" id="fileM" accept=".ifc,.IFC" multiple hidden>
 
 <!-- jadro zlúčenia — načítané aj tu, aby fungoval núdzový režim bez Web Workera -->
 <script src="js/ifc-merge.js"></script>
@@ -351,8 +515,12 @@
 <!-- rozhrania jednotlivých nástrojov -->
 <script src="js/app.js"></script>
 <script src="js/viewer.js"></script>
-<!-- validácia — hĺbková časť sa dotiahne až na kliknutie (js/validate-pyodide.js) -->
+<!-- validácia — hĺbková časť a IDS sa dotiahnu až na kliknutie (js/validate-pyodide.js) -->
 <script src="js/validate.js"></script>
+<!-- 3D prehliadač — trasa IFC 4.3 a samotný prehliadač (three.js a web-ifc sa dotiahnu až pri použití) -->
+<script src="js/ifc-alignment.js"></script>
+<script src="js/ifc-geo.js"></script>
+<script src="js/model.js"></script>
 <!-- prepínanie nástrojov -->
 <script src="js/nav.js"></script>
 </body>

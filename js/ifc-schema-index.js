@@ -421,5 +421,11 @@
     return null;
   }
 
-  root.IFCDocs = { docFor: docFor, targetFor: targetFor, size: function () { return index().size; } };
+  // Názov triedy v správnom tvare (IFCWALLSTANDARDCASE → IfcWallStandardCase).
+  function nameOf(type) {
+    var e = index().get(String(type || "").toUpperCase());
+    return e ? "Ifc" + e.name : null;
+  }
+
+  root.IFCDocs = { docFor: docFor, targetFor: targetFor, nameOf: nameOf, size: function () { return index().size; } };
 })(typeof self !== "undefined" ? self : this);

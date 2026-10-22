@@ -82,7 +82,12 @@
 
   var TYPE_SK = {
     IFCBUILDINGSTOREY:"Podlažie", IFCBUILDING:"Budova", IFCSITE:"Areál",
-    IFCSPACE:"Priestor", IFCSPATIALZONE:"Zóna"
+    IFCSPACE:"Priestor", IFCSPATIALZONE:"Zóna",
+    // IFC 4.3
+    IFCFACILITY:"Stavba", IFCFACILITYPART:"Časť stavby", IFCFACILITYPARTCOMMON:"Časť stavby",
+    IFCROAD:"Cesta", IFCROADPART:"Časť cesty", IFCBRIDGE:"Most", IFCBRIDGEPART:"Časť mosta",
+    IFCRAILWAY:"Železnica", IFCRAILWAYPART:"Časť železnice",
+    IFCMARINEFACILITY:"Vodná stavba", IFCMARINEPART:"Časť vodnej stavby"
   };
   function containerLabel(t){ return TYPE_SK[t] || pretty(t); }
   function pretty(t){ return t.replace(/^IFC/,""); }
