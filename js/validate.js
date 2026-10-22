@@ -6,14 +6,20 @@
  *   1. rýchla — beží hneď po nahratí priamo tu v JS nad indexom z js/ifc-code.js:
  *      štruktúra súboru, verzia schémy, zápis entít, čísla entít, referencie,
  *      GlobalId a nepoužité entity;
- *   2. hĺbková — na vyžiadanie, v js/validate-pyodide.js: ifcopenshell.validate
+ *   2. hĺbková — spustí sa sama hneď po rýchlej, v js/validate-pyodide.js: ifcopenshell.validate
  *      (typy hodnôt, kardinality, výčty, pravidlá WHERE) a normatívne pravidlá
  *      ifc-gherkin-rules, teda jadro oficiálnej validačnej služby buildingSMART.
- *      Sťahuje sa ~25 MB, preto až na kliknutie.
+ *      Prvé spustenie stiahne ~25 MB a beh trvá dlhšie — výsledky rýchlej
+ *      kontroly sa medzitým ukážu hneď.
  *
  * IDS — obsahuje model informácie, ktoré požaduje zadávateľ? K modelu sa nahrá
  *   súbor IDS (Information Delivery Specification) a v tom istom vlákne ho
  *   vyhodnotí knižnica IfcTester z IfcOpenShellu.
+ *
+ * Výsledky buildingSMART sú zoradené do štyroch kategórií ako vo validačnej službe
+ * validate.buildingsmart.org: zápis STEP, schéma IFC, normatívne pravidlá a
+ * odporúčané praktiky. Pri každej kontrole, ktorá neprešla, je návod na opravu
+ * z js/validate-fixes.js.
  *
  * Model je pre oba druhy spoločný — po prepnutí sa nemusí nahrávať znova.
  * Súbory nikam neodchádzajú — všetko beží vo vašom prehliadači.
@@ -49,7 +55,10 @@
     ids: null, idsState: "idle", idsMs: 0,        // vyhodnotenie IDS
     // stavy: idle | running | done | error. Všetky tri kontroly zdieľajú jedno
     // vlákno, takže naraz beží vždy len jedna — busy hovorí ktorá.
-    busy: null, msg: "", prog: null, err: {}, timer: null, t0: 0
+    busy: null, msg: "", prog: null, err: {}, timer: null, t0: 0,
+    queue: [],                                    // kontroly, ktoré sa spustia po tejto
+    shown: null,                                  // súbor, ktorého karty výsledkov sú vykreslené
+    autoRun: null                                 // súbor, pre ktorý sa už všetky kontroly spustili samy
   };
 
   // =========================================================================
@@ -186,7 +195,9 @@
   //  Rýchla kontrola (JS)
   // =========================================================================
   function chk(key, title, desc) {
-    return { key: key, title: title, desc: desc, level: "ok", note: "", items: [], total: 0 };
+    // fix = čo s nálezom urobiť (js/validate-fixes.js), ukáže sa pri neúspechu
+    return { key: key, title: title, desc: desc, level: "ok", note: "", items: [], total: 0,
+             fix: window.ValidateFixes ? window.ValidateFixes.check(key) : "" };
   }
   // Nálezy sa zbierajú len po strop — u rozbitého súboru ich môžu byť milióny.
   // id = číslo entity, ktorej sa nález týka (kvôli prekliku do prehliadača kódu).
@@ -443,9 +454,27 @@
   }
 
   // =========================================================================
-  //  Výsledok
+  //  Výsledok — štyri kategórie validačnej služby buildingSMART
   // =========================================================================
   var ICON = { ok: "✓", warn: "!", bad: "✕", info: "·", skip: "–" };
+
+  // Rovnaké stĺpce ako vo výsledkoch validate.buildingsmart.org. quick = kontroly
+  // z rýchlej kontroly, ktoré do kategórie patria; zvyšok doplnia kontroly vo
+  // vlákne (schéma → ifcopenshell.validate, pravidlá → ifc-gherkin-rules).
+  var CATS = [
+    { key: "syntax", name: "zápis STEP", en: "STEP Syntax", quick: ["struct", "syntax", "ids", "refs"],
+      desc: "Dá sa súbor vôbec prečítať? Obálka a hlavička podľa ISO 10303-21, zápis entít, " +
+            "jedinečné čísla #ID a odkazy, ktoré smerujú na existujúce entity." },
+    { key: "schema", name: "schéma IFC", en: "IFC Schema", quick: ["schema", "types", "guid"],
+      desc: "Zodpovedá obsah schéme EXPRESS deklarovanej verzie IFC? Triedy, počty a typy atribútov, " +
+            "výčty, kardinality, jedinečné GlobalId a pravidlá WHERE." },
+    { key: "norm", name: "normatívne pravidlá IFC", en: "Normative IFC Rules", quick: [],
+      desc: "Záväzné predpisy buildingSMART nad rámec schémy — Implementer Agreements a Informal " +
+            "Propositions: priestorová štruktúra, väzby, umiestnenie, reprezentácie, georeferencovanie…" },
+    { key: "pract", name: "odporúčané praktiky", en: "Industry Practices", quick: ["orph"],
+      desc: "Odporúčania, ktorých porušenie súbor nerobí neplatným, ale ide proti bežnej praxi — " +
+            "výsledkom sú výhrady, nie chyby." }
+  ];
 
   function worst(checks) {
     var bad = false, warn = false;
@@ -454,6 +483,50 @@
       else if (c.level === "warn") warn = true;
     });
     return bad ? "bad" : warn ? "warn" : "ok";
+  }
+
+  function fmt(n) { return n.toLocaleString("sk-SK"); }
+
+  function quickOf(cat) {
+    return st.checks.filter(function (c) { return cat.quick.indexOf(c.key) >= 0; });
+  }
+
+  // Stav kategórie: nálezy zo všetkých kontrol, ktoré do nej patria, a či už
+  // dobehlo všetko (schéma bez hĺbkovej kontroly je posúdená len čiastočne).
+  function catState(cat) {
+    var job = [], done = true;
+    if (cat.key === "schema") { job = st.deep || []; done = st.deepState === "done"; }
+    else if (cat.key !== "syntax") { job = st.rules ? st.rules[cat.key] : []; done = !!st.rules; }
+    var checks = quickOf(cat).concat(job);
+    var level = worst(checks);
+    // pravidlá bez spustenia sa posúdiť nedajú — rýchla kontrola tam dáva len informácie
+    if (!done && cat.key !== "schema" && level === "ok") level = "skip";
+    return { checks: checks, level: level, done: done };
+  }
+
+  function catNote(cat, s) {
+    if (s.level === "skip") return "nespustené";
+    var bad = 0, warn = 0, rules = 0;
+    s.checks.forEach(function (c) {
+      if (c.level === "bad") bad += c.total;
+      else if (c.level === "warn") warn += c.total;
+      if (c.rule && c.total) rules++;
+    });
+    var parts = [];
+    if (rules) parts.push(rules + " " + plural(rules, "pravidlo neprešlo", "pravidlá neprešli", "pravidiel neprešlo"));
+    else if (bad) parts.push(fmt(bad) + " " + plural(bad, "chyba", "chyby", "chýb"));
+    else if (warn) parts.push(fmt(warn) + " " + plural(warn, "výhrada", "výhrady", "výhrad"));
+    else parts.push("bez chýb");
+    if (!s.done) parts.push("len rýchla kontrola");
+    return parts.join(" · ");
+  }
+
+  function levelBadge(s) {
+    if (s.level === "skip") return '<span class="badge badge--skip">nespustené</span>';
+    return (s.level === "bad" ? '<span class="badge badge--bad">nájdené chyby</span>'
+          : s.level === "warn" ? '<span class="badge badge--warn">s výhradami</span>'
+          : '<span class="badge badge--ok">bez chýb</span>') +
+           (s.done ? "" : '<span class="badge badge--skip">čiastočne</span>');
   }
 
   function itemsHTML(c) {
@@ -489,13 +562,24 @@
            "</details>";
   }
 
+  // Návod na opravu sa ukáže len pri kontrole, ktorá neprešla.
+  function fixHTML(c) {
+    if (!c.fix || c.level === "ok") return "";
+    return '<div class="chk__fix"><span class="chk__fk">' + esc(c.fixLabel || "ako opraviť") + "</span>" +
+             "<span>" + esc(c.fix) +
+               (c.link ? ' <a href="' + esc(c.link) + '" target="_blank" rel="noopener">popis pravidla ↗</a>' : "") +
+             "</span>" +
+           "</div>";
+  }
+
   function checkHTML(c) {
     return '<div class="chk is-' + c.level + '">' +
              '<span class="chk__i">' + ICON[c.level] + "</span>" +
              '<div class="chk__b">' +
                '<div class="chk__t">' + esc(c.title) +
                  (c.note ? '<span class="chk__n">' + esc(c.note) + "</span>" : "") + "</div>" +
-               '<div class="chk__d">' + esc(c.desc) + "</div>" +
+               (c.desc ? '<div class="chk__d">' + esc(c.desc) + "</div>" : "") +
+               fixHTML(c) +
                itemsHTML(c) +
              "</div>" +
            "</div>";
@@ -506,6 +590,9 @@
            (vs ? '<div class="vs">' + esc(vs) + "</div>" : '<div class="v">' + esc(v) + "</div>") + "</div>";
   }
 
+  // Kostra štyroch kariet — rýchla kontrola sa vypíše hneď, časti z vlákna
+  // (vlJob-…) a hlavičky sa prekresľujú podľa behu, aby sa nezatvárali
+  // rozbalené nálezy rýchlej kontroly.
   function showResults() {
     var idx = st.idx, s = st.stats;
     $("vlHead").hidden = true;
@@ -521,42 +608,96 @@
       '<div class="m">triedy <b>' + s.types + "</b></div>" +
       '<div class="m">' + Math.round(st.size / 1024).toLocaleString("sk-SK") + " kB</div>";
 
+    CATS.forEach(function (cat) {
+      var quick = quickOf(cat), job = cat.key !== "syntax";
+      $("vlCat-" + cat.key).innerHTML =
+        '<div class="result__head" id="vlCH-' + cat.key + '"></div>' +
+        '<div class="result__body">' +
+          '<p class="help vlcat__d">' + esc(cat.desc) + "</p>" +
+          (quick.length ? (job ? '<div class="vlsub">rýchla kontrola · hneď po nahratí</div>' : "") +
+                          '<div class="chks">' + quick.map(checkHTML).join("") + "</div>" : "") +
+          (job ? '<div class="vljob" id="vlJob-' + cat.key + '"></div>' : "") +
+        "</div>";
+    });
+    st.shown = st.file;
+    renderBsdd();
+    // hĺbková kontrola aj pravidlá sa spustia samy — pre každý súbor raz; po
+    // zrušení alebo chybe sa znova púšťajú tlačidlom
+    if (st.autoRun !== st.file && !st.busy) {
+      st.autoRun = st.file;
+      runAll();
+    }
+  }
+
+  function renderBsdd() {
+    if (!st.checks || st.shown !== st.file) return;
     renderSummary();
+    CATS.forEach(renderCatHead);
     renderDeep();
     renderRules();
+    renderPract();
+  }
+
+  function renderCatHead(cat, i) {
+    $("vlCH-" + cat.key).innerHTML =
+      '<span class="vlcat__no">' + (i + 1) + "</span><h2>" + esc(cat.name) + "</h2>" +
+      levelBadge(catState(cat)) + '<span class="result__size">' + esc(cat.en) + "</span>";
+  }
+
+  function tileHTML(cat, i, s) {
+    return '<button type="button" class="vlcat is-' + s.level + '" data-cat="' + cat.key + '"' +
+             ' title="Prejsť na kategóriu ' + esc(cat.name) + '">' +
+             '<span class="chk__i">' + ICON[s.level] + "</span>" +
+             '<span class="vlcat__b">' +
+               '<span class="vlcat__t">' + (i + 1) + " · " + esc(cat.name) + "</span>" +
+               '<span class="vlcat__en">' + esc(cat.en) + "</span>" +
+               '<span class="vlcat__n">' + esc(catNote(cat, s)) + "</span>" +
+             "</span>" +
+           "</button>";
   }
 
   function renderSummary() {
-    var s = st.stats, level = worst(st.checks);
-    var badge = level === "ok" ? '<span class="badge badge--ok">bez chýb</span>'
+    var s = st.stats;
+    var states = CATS.map(catState);
+    var level = worst(states);
+    var all = states.every(function (x) { return x.done; });
+    var badge = level === "bad" ? '<span class="badge badge--bad">nájdené chyby</span>'
               : level === "warn" ? '<span class="badge badge--warn">s výhradami</span>'
-              : '<span class="badge badge--bad">nájdené chyby</span>';
-    var errs = 0, warns = 0;
-    st.checks.forEach(function (c) {
-      if (c.level === "bad") errs += c.total;
-      else if (c.level === "warn") warns += c.total;
-    });
+              : all ? '<span class="badge badge--ok">bez chýb</span>'
+              : '<span class="badge badge--skip">neúplné</span>';
 
     $("vlSummary").innerHTML =
-      '<div class="result__head"><h2>rýchla kontrola</h2>' + badge +
+      '<div class="result__head"><h2>výsledok validácie buildingSMART</h2>' + badge +
         '<span class="result__size">' + esc(st.name) + "</span></div>" +
       '<div class="result__body">' +
+        '<div class="vlcats">' + CATS.map(function (cat, i) { return tileHTML(cat, i, states[i]); }).join("") + "</div>" +
         '<div class="stats">' +
-          statHTML("chyby", errs.toLocaleString("sk-SK")) +
-          statHTML("výhrady", warns.toLocaleString("sk-SK")) +
-          statHTML("entity", st.stats.entities.toLocaleString("sk-SK")) +
+          statHTML("entity", s.entities.toLocaleString("sk-SK")) +
           statHTML("objekty s GlobalId", s.objects.toLocaleString("sk-SK")) +
           statHTML("triedy", String(s.types)) +
         "</div>" +
-        '<div class="chks">' + st.checks.map(checkHTML).join("") + "</div>" +
+        '<div class="dlrow">' +
+          (all ? "" : '<button class="btn btn--sm" id="vlAll"' + (st.busy ? " disabled" : "") +
+                      '>dokončiť všetky kontroly <span class="btn__arr">→</span></button>') +
+          '<span class="mergehint">kategórie zodpovedajú stĺpcom validačnej služby validate.buildingsmart.org' +
+            (all ? "" : " · spustí hĺbkovú kontrolu schémy aj pravidlá") + "</span>" +
+        "</div>" +
       "</div>";
+    if (!all) $("vlAll").addEventListener("click", runAll);
   }
 
   // ---- spoločná obsluha kontrol vo vlákne -----------------------------------
   // Všetky bežia v tom istom vlákne (Python sa nedá spustiť dvakrát naraz), takže
   // kým jedna beží, ostatné majú tlačidlo vypnuté.
   // pri IDS sa prekreslia aj panely so súbormi — ich tlačidlá počas behu nejdú
-  function renderJobs() { renderDeep(); renderRules(); renderIds(); }
+  function renderJobs() { renderBsdd(); renderIds(); }
+
+  // priebeh — prekreslí sa len časť, ktorá práve beží
+  function renderBusy() {
+    if (st.busy === "validate") renderDeep();
+    else if (st.busy === "rules") renderRules();
+    else if (st.busy === "ids") renderIdsJob();
+  }
 
   // výsledky všetkých kontrol vo vlákne — patria k jednému modelu
   function resetJobs() {
@@ -565,7 +706,7 @@
     st.deep = null; st.deepState = "idle"; st.deepMs = 0;
     st.rules = null; st.rulesState = "idle"; st.rulesMs = 0; st.rulesInfo = null;
     st.ids = null; st.idsState = "idle"; st.idsMs = 0;
-    st.busy = null; st.msg = ""; st.prog = null; st.err = {};
+    st.busy = null; st.msg = ""; st.prog = null; st.err = {}; st.queue = [];
   }
 
   function tick() {
@@ -577,17 +718,15 @@
   // koľký z 104 predpisov práve beží, pri IDS koľká špecifikácia.
   function busyHTML(stopId, unit) {
     var pct = st.prog && st.prog.total ? Math.round(st.prog.done / st.prog.total * 100) : null;
-    return '<div class="deep__body">' +
-             '<div class="deep__run"><div class="spinner"></div>' +
-               '<div class="deep__st"><div class="deep__msg">' + esc(st.msg || "pripravujem…") + "</div>" +
-                 '<div class="help" id="vlElapsed">beží 0 s</div>' +
-                 (pct == null ? "" :
-                   '<div class="pbar pbar--chk"><i style="width:' + pct + '%"></i></div>' +
-                   '<div class="help">' + st.prog.done + " / " + st.prog.total + " " +
-                     (unit || "pravidiel") + "</div>") +
-               "</div>" +
-               '<button class="btn btn--sm btn--ghost" id="' + stopId + '">zrušiť</button>' +
+    return '<div class="deep__run"><div class="spinner"></div>' +
+             '<div class="deep__st"><div class="deep__msg">' + esc(st.msg || "pripravujem…") + "</div>" +
+               '<div class="help" id="vlElapsed">beží 0 s</div>' +
+               (pct == null ? "" :
+                 '<div class="pbar pbar--chk"><i style="width:' + pct + '%"></i></div>' +
+                 '<div class="help">' + st.prog.done + " / " + st.prog.total + " " +
+                   (unit || "pravidiel") + "</div>") +
              "</div>" +
+             '<button class="btn btn--sm btn--ghost" id="' + stopId + '">zrušiť</button>' +
            "</div>";
   }
 
@@ -598,6 +737,16 @@
       reader.onerror = function () { reject(new Error("Súbor " + file.name + " sa nepodarilo prečítať.")); };
       reader.readAsArrayBuffer(file);
     });
+  }
+
+  // všetky kontroly vo vlákne — po nahratí samy, inak tlačidlom „dokončiť všetky
+  // kontroly“; čo ešte nedobehlo, spustí jedno po druhom
+  function runAll() {
+    if (st.busy) return;
+    st.queue = [];
+    if (st.deepState !== "done") st.queue.push("validate");
+    if (st.rulesState !== "done") st.queue.push("rules");
+    if (st.queue.length) startJob(st.queue.shift());
   }
 
   function startJob(kind) {
@@ -632,7 +781,7 @@
       if (msg.total) st.prog = { done: msg.done || 0, total: msg.total };
       var el = document.querySelector(".deep__msg");
       if (el && !msg.total) el.textContent = msg.text;
-      else renderJobs();
+      else renderBusy();
       return;
     }
     clearInterval(st.timer);
@@ -655,12 +804,13 @@
       failJob(kind, msg.message);
       return;
     }
-    renderJobs();
+    if (st.queue.length) startJob(st.queue.shift());
+    else renderJobs();
   }
 
   function failJob(kind, message) {
     clearInterval(st.timer);
-    st.busy = null;
+    st.busy = null; st.queue = [];
     st.err[kind] = message;
     setState(kind, "error");
     renderJobs();
@@ -670,7 +820,7 @@
     clearInterval(st.timer);
     engine.stop();       // vlákno sa ukončí, knižnice sa pri ďalšom behu načítajú znova
     setState(st.busy, "idle");
-    st.busy = null; st.msg = ""; st.prog = null;
+    st.busy = null; st.msg = ""; st.prog = null; st.queue = [];
     renderJobs();
   }
 
@@ -694,108 +844,137 @@
            "môže zlyhať na nedostatok pamäte.</span></div>";
   }
 
-  // ---- kontrola podľa schémy -----------------------------------------------
+  // karta kategórie, do ktorej sa kreslí výsledok z vlákna (null = nie je zobrazená)
+  function jobBox(key) {
+    return st.shown === st.file ? $("vlJob-" + key) : null;
+  }
+
+  // ---- 2 · schéma IFC — hĺbková kontrola ------------------------------------
   function renderDeep() {
-    var box = $("vlDeep");
+    var box = jobBox("schema");
+    if (!box) return;
+    var head = '<div class="vlsub">hĺbková kontrola · ifcopenshell.validate';
 
     if (st.busy === "validate") {
-      box.innerHTML = '<div class="card__head">hĺbková kontrola podľa schémy</div>' + busyHTML("vlStop");
+      box.innerHTML = head + "</div>" + busyHTML("vlStop");
       $("vlStop").addEventListener("click", stopJob);
       return;
     }
 
     if (st.deepState === "done" && st.deep) {
-      var level = worst(st.deep);
       box.innerHTML =
-        '<div class="result__head"><h2>hĺbková kontrola podľa schémy</h2>' +
-          (level === "ok" ? '<span class="badge badge--ok">bez chýb</span>'
-                          : '<span class="badge badge--bad">nájdené chyby</span>') +
-          '<span class="result__size">' + (st.deepMs / 1000).toFixed(1) + " s</span></div>" +
-        '<div class="result__body">' +
-          '<div class="chks">' + st.deep.map(checkHTML).join("") + "</div>" +
-          '<div class="dlrow">' +
-            '<button class="btn btn--sm btn--ghost" id="vlRun"' + (st.busy ? " disabled" : "") +
-              ">spustiť znova</button>" +
-            '<span class="mergehint">jadro ifcopenshell.validate — rovnaké ako v službe buildingSMART</span>' +
-          "</div>" +
+        head + " · " + (st.deepMs / 1000).toFixed(1) + " s</div>" +
+        '<div class="chks">' + st.deep.map(checkHTML).join("") + "</div>" +
+        '<div class="dlrow">' +
+          '<button class="btn btn--sm btn--ghost" id="vlRun"' + (st.busy ? " disabled" : "") +
+            ">spustiť znova</button>" +
+          '<span class="mergehint">jadro ifcopenshell.validate — rovnaké ako v službe buildingSMART</span>' +
         "</div>";
       $("vlRun").addEventListener("click", function () { startJob("validate"); });
       return;
     }
 
     box.innerHTML =
-      '<div class="card__head">hĺbková kontrola podľa schémy</div>' +
-      '<div class="deep__body">' +
-        "<p class=\"help\">Spustí <b>ifcopenshell.validate</b> — to isté jadro, ktoré používa " +
-        "validačná služba buildingSMART. Overí dátové typy atribútov, kardinality, " +
-        "výčtové hodnoty, SELECT typy a pravidlá WHERE zo schémy EXPRESS.</p>" +
-        errNote("validate") + sizeNote(false) +
-        '<div class="dlrow">' +
-          '<button class="btn btn--sm" id="vlRun"' + (st.busy ? " disabled" : "") +
-            '>spustiť hĺbkovú kontrolu <span class="btn__arr">→</span></button>' +
-          '<span class="mergehint">prvé spustenie stiahne ~25 MB knižnice · súbor zostáva vo vašom počítači</span>' +
-        "</div>" +
+      head + "</div>" +
+      "<p class=\"help\">Rýchla kontrola overí len triedy, počty atribútov a GlobalId. Úplný stĺpec " +
+      "<b>IFC Schema</b> dá až <b>ifcopenshell.validate</b> — to isté jadro, ktoré používa validačná " +
+      "služba buildingSMART: dátové typy atribútov, kardinality, výčtové hodnoty, SELECT typy a " +
+      "pravidlá WHERE zo schémy EXPRESS.</p>" +
+      errNote("validate") + sizeNote(false) +
+      '<div class="dlrow">' +
+        '<button class="btn btn--sm" id="vlRun"' + (st.busy ? " disabled" : "") +
+          '>spustiť hĺbkovú kontrolu <span class="btn__arr">→</span></button>' +
+        '<span class="mergehint">prvé spustenie stiahne ~25 MB knižnice · súbor zostáva vo vašom počítači</span>' +
       "</div>";
     $("vlRun").addEventListener("click", function () { startJob("validate"); });
   }
 
-  // ---- normatívne pravidlá --------------------------------------------------
+  // ---- 3 · normatívne pravidlá ----------------------------------------------
+  function rulesStats(s) {
+    return '<div class="stats">' +
+             statHTML("pravidlá", String(s.total)) +
+             statHTML("prešlo", String(s.passed || 0)) +
+             statHTML("neprešlo", String(s.failed || 0)) +
+             statHTML("nevyhodnotené", String(s.error || 0)) +
+             statHTML("vypnuté", String(s.skipped || 0)) +
+           "</div>";
+  }
+
   function renderRules() {
-    var box = $("vlRules");
+    var box = jobBox("norm");
+    if (!box) return;
+    var head = '<div class="vlsub">ifc-gherkin-rules · Implementer Agreements a Informal Propositions';
 
     if (st.busy === "rules") {
-      box.innerHTML = '<div class="card__head">normatívne pravidlá buildingSMART</div>' + busyHTML("vlRStop");
+      box.innerHTML = head + "</div>" + busyHTML("vlRStop");
       $("vlRStop").addEventListener("click", stopJob);
+      renderPract();
       return;
     }
 
     if (st.rulesState === "done" && st.rules) {
-      var info = st.rulesInfo || {}, sstat = info.status || {};
-      var level = worst(st.rules);
       box.innerHTML =
-        '<div class="result__head"><h2>normatívne pravidlá buildingSMART</h2>' +
-          (level === "ok" ? '<span class="badge badge--ok">bez chýb</span>'
-           : level === "warn" ? '<span class="badge badge--warn">s výhradami</span>'
-           : '<span class="badge badge--bad">nájdené chyby</span>') +
-          '<span class="result__size">' + (st.rulesMs / 1000).toFixed(0) + " s</span></div>" +
-        '<div class="result__body">' +
-          '<div class="stats">' +
-            statHTML("pravidlá", String(info.rules || 0)) +
-            statHTML("prešlo", String(sstat.passed || 0)) +
-            statHTML("neprešlo", String(sstat.failed || 0)) +
-            statHTML("nevyhodnotené", String(sstat.error || 0)) +
-            statHTML("vypnuté", String(sstat.skipped || 0)) +
-          "</div>" +
-          '<div class="chks">' + st.rules.map(checkHTML).join("") + "</div>" +
-          '<div class="dlrow">' +
-            '<button class="btn btn--sm btn--ghost" id="vlRRun"' + (st.busy ? " disabled" : "") +
-              ">spustiť znova</button>" +
-            '<span class="mergehint">ifc-gherkin-rules · vypnuté pravidlá sú tak označené priamo ' +
-              "v repozitári buildingSMART · najviac 25 nálezov na pravidlo</span>" +
-          "</div>" +
+        head + " · " + (st.rulesMs / 1000).toFixed(0) + " s</div>" +
+        rulesStats(st.rules.stat.norm) +
+        '<div class="chks">' + st.rules.norm.map(checkHTML).join("") + "</div>" +
+        '<div class="dlrow">' +
+          '<button class="btn btn--sm btn--ghost" id="vlRRun"' + (st.busy ? " disabled" : "") +
+            ">spustiť znova</button>" +
+          '<span class="mergehint">vypnuté pravidlá sú tak označené priamo v repozitári buildingSMART · ' +
+            "najviac 25 nálezov na pravidlo</span>" +
         "</div>";
       $("vlRRun").addEventListener("click", function () { startJob("rules"); });
       return;
     }
 
     box.innerHTML =
-      '<div class="card__head">normatívne pravidlá buildingSMART</div>' +
-      '<div class="deep__body">' +
-        "<p class=\"help\">Spustí <b>ifc-gherkin-rules</b> — 104 predpisov, ktoré vo validačnej " +
-        "službe buildingSMART pokrývajú <b>Implementer Agreements</b>, <b>Informal Propositions</b> " +
-        "a odporúčané praktiky: priestorová štruktúra, väzby, umiestnenie, reprezentácie, " +
-        "jednotky, property sety, georeferencovanie a ďalšie.</p>" +
-        errNote("rules") + sizeNote(true) +
-        '<div class="note"><span class="note__i">i</span><span>Pravidlá pracujú s celým modelom, ' +
-          "takže beh je pomalší než kontrola schémy — pri modeli so 100 tisíc entitami " +
-          "rádovo dve minúty. Priebeh vidíte počas behu a dá sa zrušiť.</span></div>" +
-        '<div class="dlrow">' +
-          '<button class="btn btn--sm" id="vlRRun"' + (st.busy ? " disabled" : "") +
-            '>spustiť normatívne pravidlá <span class="btn__arr">→</span></button>' +
-          '<span class="mergehint">prvé spustenie stiahne ~12 MB navyše · súbor zostáva vo vašom počítači</span>' +
-        "</div>" +
+      head + "</div>" +
+      "<p class=\"help\">Spustí <b>ifc-gherkin-rules</b> — 104 predpisov z validačnej služby " +
+      "buildingSMART. Jedným behom sa vyhodnotia normatívne pravidlá (táto kategória) aj " +
+      "odporúčané praktiky (kategória 4).</p>" +
+      errNote("rules") + sizeNote(true) +
+      '<div class="note"><span class="note__i">i</span><span>Pravidlá pracujú s celým modelom, ' +
+        "takže beh je pomalší než kontrola schémy — pri modeli so 100 tisíc entitami " +
+        "rádovo dve minúty. Priebeh vidíte počas behu a dá sa zrušiť.</span></div>" +
+      '<div class="dlrow">' +
+        '<button class="btn btn--sm" id="vlRRun"' + (st.busy ? " disabled" : "") +
+          '>spustiť pravidlá <span class="btn__arr">→</span></button>' +
+        '<span class="mergehint">prvé spustenie stiahne ~25 MB knižnice · súbor zostáva vo vašom počítači</span>' +
       "</div>";
     $("vlRRun").addEventListener("click", function () { startJob("rules"); });
+  }
+
+  // ---- 4 · odporúčané praktiky — výsledok toho istého behu pravidiel --------
+  function renderPract() {
+    var box = jobBox("pract");
+    if (!box) return;
+    var head = '<div class="vlsub">ifc-gherkin-rules · Industry Practices';
+
+    if (st.busy === "rules") {
+      box.innerHTML = head + "</div>" +
+        '<div class="deep__run"><div class="spinner"></div>' +
+          '<div class="deep__msg">vyhodnocuje sa spolu s normatívnymi pravidlami…</div></div>';
+      return;
+    }
+
+    if (st.rulesState === "done" && st.rules) {
+      box.innerHTML =
+        head + "</div>" +
+        rulesStats(st.rules.stat.pract) +
+        '<div class="chks">' + st.rules.pract.map(checkHTML).join("") + "</div>";
+      return;
+    }
+
+    box.innerHTML =
+      head + "</div>" +
+      "<p class=\"help\">Pravidlá odporúčaných praktík sú súčasťou <b>ifc-gherkin-rules</b> a vyhodnotia " +
+      "sa jedným behom s normatívnymi pravidlami.</p>" +
+      errNote("rules") +
+      '<div class="dlrow">' +
+        '<button class="btn btn--sm" id="vlPRun"' + (st.busy ? " disabled" : "") +
+          '>spustiť pravidlá <span class="btn__arr">→</span></button>' +
+      "</div>";
+    $("vlPRun").addEventListener("click", function () { startJob("rules"); });
   }
 
   // Hlásenia z ifcopenshell rozdelíme na dve kontroly: hodnoty atribútov
@@ -824,41 +1003,87 @@
     return [cAttr, cRule];
   }
 
-  // Výsledky normatívnych pravidiel. Závažnosť určuje samotné pravidlo:
-  // ERROR = porušená dohoda implementátorov / informal proposition,
-  // WARNING = odporúčaná praktika.
+  // „ALB004 - Alignment in spatial structure relationships“ → ALB004
+  function ruleCode(feature) { return String(feature || "").split(" - ")[0].trim(); }
+
+  // Výsledky pravidiel do kategórií 3 a 4 — po jednej kontrole na každé pravidlo,
+  // ktoré neprešlo, s návodom na opravu z js/validate-fixes.js. Kategóriu určuje
+  // tag pravidla @industry-practice; tie validačná služba hlási ako WARNING,
+  // ostatné (Implementer Agreements, Informal Propositions) ako ERROR.
   function ruleChecks(data) {
-    var cErr = chk("gerr", "Normatívne pravidlá",
-      "Implementer Agreements a Informal Propositions — záväzné predpisy buildingSMART.");
-    var cWarn = chk("gwarn", "Odporúčané praktiky",
-      "Pravidlá, ktoré neporušujú schému, ale idú proti bežnej praxi.");
-    var cSkip = chk("gskip", "Nevyhodnotené pravidlá",
-      "Pravidlá, ktoré v prehliadači nedobehli — napríklad preto, že potrebujú knižnicu, " +
-      "ktorá sa do WebAssembly nedá preložiť (georeferencovanie, priestorový index).");
+    var out = { norm: [], pract: [], stat: { norm: { total: 0 }, pract: { total: 0 } } };
+    var ip = {}, byRule = {};
+
+    (data.features || []).forEach(function (f) {
+      ip[ruleCode(f.name)] = !!f.ip;
+      var s = out.stat[f.ip ? "pract" : "norm"];
+      s[f.status] = (s[f.status] || 0) + 1;
+      s.total++;
+    });
+    if (!data.features) {
+      out.stat.norm = data.status || {};
+      out.stat.norm.total = data.rules || 0;
+    }
+    function catOf(code, severity) {
+      return code in ip ? (ip[code] ? "pract" : "norm") : (severity === "WARNING" ? "pract" : "norm");
+    }
 
     (data.outcomes || []).forEach(function (o) {
-      var c = o.severity === "ERROR" ? cErr : cWarn;
-      var rule = (o.feature || "").split(" - ")[0];
+      var code = ruleCode(o.feature);
+      var c = byRule[code];
+      if (!c) {
+        var fx = window.ValidateFixes.rule(code);
+        var name = String(o.feature || "").split(" - ").slice(1).join(" - ");
+        c = byRule[code] = chk("r:" + code, code + (fx.title ? " · " + fx.title : ""),
+                               name ? "pravidlo buildingSMART: " + name : "");
+        c.rule = true; c.fix = fx.fix; c.link = fx.url;
+        out[catOf(code, o.severity)].push(c);
+      }
       var parts = [];
       if (o.expected) parts.push("očakávané: " + o.expected);
       if (o.observed) parts.push("zistené: " + o.observed);
-      var line = (o.inst ? "#" + o.inst + " " : "") + rule +
-                 (parts.length ? " — " + parts.join(" · ") : "");
+      var line = (o.inst ? "#" + o.inst : "") + (o.inst && parts.length ? " — " : "") + parts.join(" · ");
       var full = (o.feature || "") + "\n" + (o.code ? o.code + "\n" : "") + parts.join("\n");
-      add(c, line.length > 260 ? line.slice(0, 260) + "…" : line, -1, full, o.inst);
+      add(c, line.length > 260 ? line.slice(0, 260) + "…" : (line || o.code || code), -1, full, o.inst);
     });
 
-    (data.errored || []).forEach(function (name) { add(cSkip, name); });
+    ["norm", "pract"].forEach(function (k) {
+      var level = k === "pract" ? "warn" : "bad";
+      out[k].forEach(function (c) {
+        seal(c, level, "", function (n) {
+          return n.toLocaleString("sk-SK") + " " + plural(n, "nález", "nálezy", "nálezov");
+        });
+      });
+      if (!out[k].length) {
+        var okc = chk("rok-" + k, "Žiadne porušené pravidlo",
+          k === "pract" ? "Model zodpovedá všetkým vyhodnoteným odporúčaným praktikám."
+                        : "Model spĺňa všetky vyhodnotené normatívne pravidlá.");
+        out[k].push(okc);
+      }
+    });
 
-    seal(cErr, "bad", "žiadne porušené pravidlo",
-         function (n) { return n.toLocaleString("sk-SK") + " " + plural(n, "porušenie", "porušenia", "porušení"); });
-    seal(cWarn, "warn", "žiadne výhrady",
-         function (n) { return n.toLocaleString("sk-SK") + " " + plural(n, "výhrada", "výhrady", "výhrad"); });
-    seal(cSkip, "warn", "všetky pravidlá dobehli",
-         function (n) { return n + " " + plural(n, "pravidlo", "pravidlá", "pravidiel"); });
-    return [cErr, cWarn, cSkip];
+    // Nevyhodnotené pravidlá nie sú chybou modelu — model len nebolo čím overiť.
+    var skip = { norm: null, pract: null };
+    (data.errored || []).forEach(function (name) {
+      var k = catOf(ruleCode(name), "");
+      if (!skip[k]) {
+        skip[k] = chk("rskip-" + k, "Nevyhodnotené pravidlá",
+          "Pravidlá, ktoré v prehliadači nedobehli — napríklad preto, že potrebujú knižnicu, " +
+          "ktorá sa do WebAssembly nedá preložiť (georeferencovanie, priestorový index).");
+        skip[k].fix = "Toto nie je chyba modelu. Ak sa vás pravidlá týkajú (napr. georeferencovanie), " +
+                      "overte súbor aj v oficiálnej službe validate.buildingsmart.org.";
+        skip[k].fixLabel = "čo urobiť";
+        out[k].push(skip[k]);
+      }
+      add(skip[k], name);
+    });
+    ["norm", "pract"].forEach(function (k) {
+      if (!skip[k]) return;
+      skip[k].level = "skip";
+      skip[k].note = skip[k].total + " " + plural(skip[k].total, "pravidlo", "pravidlá", "pravidiel");
+    });
+    return out;
   }
-
 
   // =========================================================================
   //  Kontrola podľa IDS
@@ -1000,7 +1225,8 @@
     var meta = st.idsMeta;
 
     if (st.busy === "ids") {
-      box.innerHTML = '<div class="card__head">vyhodnotenie IDS</div>' + busyHTML("vlIStop", "špecifikácií");
+      box.innerHTML = '<div class="card__head">vyhodnotenie IDS</div>' + '<div class="deep__body">' +
+                      busyHTML("vlIStop", "špecifikácií") + "</div>";
       $("vlIStop").addEventListener("click", stopJob);
       return;
     }
@@ -1238,6 +1464,11 @@
     openInCode(+li.getAttribute("data-goid"), +li.getAttribute("data-goline"));
   }
   $("vlApp").addEventListener("click", onFinding);
+  // dlaždica v súhrne posunie na kartu svojej kategórie
+  $("vlSummary").addEventListener("click", function (e) {
+    var b = e.target.closest(".vlcat");
+    if (b) $("vlCat-" + b.getAttribute("data-cat")).scrollIntoView({ behavior: "smooth", block: "start" });
+  });
   $("vlIds").addEventListener("click", onFinding);
 
   window.ValidateTool = {

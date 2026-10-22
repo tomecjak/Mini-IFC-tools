@@ -556,6 +556,53 @@ details.adv[open] > summary::before{content:"–"}
 .ids__ft{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;
   color:var(--check);border:1px solid var(--check-line);padding:0 5px;flex:none}
 
+/* buildingSMART — štyri kategórie ako vo validačnej službe */
+.badge--skip{background:var(--paper);color:var(--faint);border-color:var(--line-strong)}
+.vlcats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--line)}
+.vlcat{
+  display:flex;gap:10px;align-items:flex-start;text-align:left;padding:12px 13px;
+  border:none;border-right:1px solid var(--line);background:var(--surface);
+  font:inherit;color:inherit;cursor:pointer;
+}
+.vlcat:last-child{border-right:none}
+.vlcat:hover{background:var(--check-tint)}
+.vlcat:focus-visible{outline:2px solid var(--check);outline-offset:-2px}
+.vlcat.is-ok .chk__i{color:var(--primary);background:var(--primary-tint)}
+.vlcat.is-bad .chk__i{color:var(--danger);background:var(--danger-tint)}
+.vlcat.is-warn .chk__i{color:var(--warn);background:var(--warn-tint)}
+.vlcat.is-skip .chk__i{color:var(--faint);background:var(--paper)}
+.vlcat__b{display:flex;flex-direction:column;gap:2px;min-width:0}
+.vlcat__t{font-size:13px;font-weight:600}
+.vlcat__en{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+.vlcat__n{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:3px}
+.vlcat.is-bad .vlcat__n{color:var(--danger)}
+.vlcat.is-warn .vlcat__n{color:var(--warn)}
+@media (max-width:760px){
+  .vlcats{grid-template-columns:1fr 1fr}
+  .vlcat:nth-child(2n){border-right:none}
+  .vlcat:nth-child(-n+2){border-bottom:1px solid var(--line)}
+}
+.vlcat__no{
+  font-family:var(--mono);font-size:11px;font-weight:600;width:20px;height:20px;line-height:18px;
+  text-align:center;border:1px solid var(--check-line);color:var(--check);flex:none;
+}
+.vlcat__d{margin:0}
+#vlApp > .card{scroll-margin-top:72px}
+.vlsub{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.vljob{display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--line);padding-top:14px}
+.vljob .help{margin:0}
+
+/* návod na opravu pri kontrole, ktorá neprešla */
+.chk__fix{
+  display:flex;gap:10px;margin-top:8px;padding:8px 10px;
+  border-left:2px solid var(--check);background:var(--check-tint);
+  font-size:12.5px;line-height:1.5;color:var(--ink);
+}
+.chk__fk{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--check);flex:none;padding-top:2px;white-space:nowrap}
+.chk__fix a{color:var(--check);white-space:nowrap}
+@media (max-width:560px){ .chk__fix{flex-direction:column;gap:3px} }
+
 /* hĺbková kontrola */
 .deep__body{padding:16px;display:flex;flex-direction:column;gap:12px}
 .deep__body .help{margin:0}

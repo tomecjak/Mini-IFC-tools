@@ -332,7 +332,7 @@
   <section class="card toolhead" id="vlHead">
     <div class="kicker kicker--chk">// kontrola kvality</div>
     <h1>Validácia IFC súboru</h1>
-    <p class="lede">Dva spôsoby kontroly. <b>buildingSMART</b> overí, či je súbor správne zapísaný podľa štandardu IFC — rýchla kontrola zápisu a väzieb hneď po nahratí, na vyžiadanie hĺbková kontrola podľa schémy EXPRESS (<b>ifcopenshell.validate</b>) a 104 normatívnych pravidiel z <b>ifc-gherkin-rules</b>. <b>IDS</b> overí, či model obsahuje informácie, ktoré od neho požaduje zadávateľ — triedy, atribúty, vlastnosti, klasifikácie a materiály podľa súboru <b>IDS</b> (Information Delivery Specification). Súbory sa nikam neodosielajú.</p>
+    <p class="lede">Dva spôsoby kontroly. <b>buildingSMART</b> overí, či je súbor správne zapísaný podľa štandardu IFC — po nahratí sa spustia všetky kontroly naraz — rýchla kontrola zápisu a väzieb, hĺbková kontrola podľa schémy EXPRESS (<b>ifcopenshell.validate</b>) a 104 normatívnych pravidiel z <b>ifc-gherkin-rules</b>. Výsledky sú zoradené do rovnakých kategórií ako vo validačnej službe buildingSMART — zápis STEP, schéma IFC, normatívne pravidlá a odporúčané praktiky — a pri každej chybe je návod, ako ju opraviť. <b>IDS</b> overí, či model obsahuje informácie, ktoré od neho požaduje zadávateľ — triedy, atribúty, vlastnosti, klasifikácie a materiály podľa súboru <b>IDS</b> (Information Delivery Specification). Súbory sa nikam neodosielajú.</p>
   </section>
 
   <!-- výber druhu kontroly -->
@@ -360,9 +360,12 @@
   <!-- buildingSMART — výsledky -->
   <section class="vl" id="vlApp" hidden>
     <div class="metastrip" id="vlChips"></div>
+    <!-- súhrn a štyri kategórie ako vo validačnej službe buildingSMART -->
     <section class="card result" id="vlSummary"></section>
-    <section class="card deep" id="vlDeep"></section>
-    <section class="card deep" id="vlRules"></section>
+    <section class="card result" id="vlCat-syntax"></section>
+    <section class="card result" id="vlCat-schema"></section>
+    <section class="card result" id="vlCat-norm"></section>
+    <section class="card result" id="vlCat-pract"></section>
   </section>
 
   <!-- IDS — model, špecifikácia a vyhodnotenie -->
@@ -515,7 +518,8 @@
 <!-- rozhrania jednotlivých nástrojov -->
 <script src="js/app.js"></script>
 <script src="js/viewer.js"></script>
-<!-- validácia — hĺbková časť a IDS sa dotiahnu až na kliknutie (js/validate-pyodide.js) -->
+<!-- validácia — hĺbková časť sa dotiahne po nahratí modelu, IDS až na kliknutie (js/validate-pyodide.js) -->
+<script src="js/validate-fixes.js"></script>
 <script src="js/validate.js"></script>
 <!-- 3D prehliadač — trasa IFC 4.3 a samotný prehliadač (three.js a web-ifc sa dotiahnu až pri použití) -->
 <script src="js/ifc-alignment.js"></script>
