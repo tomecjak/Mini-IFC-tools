@@ -177,7 +177,7 @@
   }
 
   function renderPipeline() {
-    $("vlHead").hidden = false;
+    $("vlHead").hidden = true;       // súbor je nahratý — úvodný popis už netreba
     panel().hidden = false;
     $("vlApp").hidden = true;
     panel().classList.remove("is-error");

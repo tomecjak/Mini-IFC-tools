@@ -451,6 +451,31 @@
     };
   }
 
+  /* Trasa z hotových úsekov (napr. z LandXML, js/landxml.js) — rovnaké jadro ako pri IFC.
+     o.hs: [{type, x, y, dir, r0, r1, len}] — m a rad, polomer + doľava, − doprava, 0 = priamka;
+     o.vs: [{type, start, len, z0, g0, g1, r}] — start je vzdialenosť od začiatku trasy;
+     o.matrix: umiestnenie (4×4 po stĺpcoch), ktorým sa body prevedú do súradníc projektu. */
+  function buildAlignment(o) {
+    var hs = [], dist = 0;
+    (o.hs || []).forEach(function (s) {
+      if (!(s.len > 0)) return;
+      var seg = { type: s.type || "LINE", x: s.x, y: s.y, dir: s.dir, r0: s.r0 || 0, r1: s.r1 || 0, len: s.len, start: dist };
+      seg.at = hSegment(seg);
+      hs.push(seg);
+      dist += seg.len;
+    });
+    if (!hs.length) return null;
+    var vs = (o.vs || []).filter(function (s) { return s.len > 0; })
+      .map(function (s) { return { type: s.type, start: s.start, len: s.len, z0: s.z0, g0: s.g0, g1: s.g1, r: s.r || 0 }; })
+      .sort(function (a, b) { return a.start - b.start; });
+    return makeAlignment({
+      id: o.id == null ? null : o.id, name: o.name || "", guid: "",
+      hs: hs, vs: vs, cs: [], length: dist, startStation: o.startStation || 0,
+      railHead: null, matrix: o.matrix || [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+      hasVertical: vs.length > 0
+    });
+  }
+
   /* Staničenie v tvare „km 1,234.567“ — kilometre, za čiarkou metre. */
   function formatStation(st, dec) {
     dec = dec == null ? 3 : dec;
@@ -476,6 +501,7 @@
 
   var api = {
     readAlignments: readAlignments,
+    buildAlignment: buildAlignment,
     units: units,
     placementMatrix: placementMatrix,
     formatStation: formatStation,

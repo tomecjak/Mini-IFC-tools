@@ -385,7 +385,7 @@
   <section class="card toolhead" id="mdHead">
     <div class="kicker kicker--mod">// 3d · koordinácia · ifc 4.3</div>
     <h1>Prehliadač IFC modelov</h1>
-    <p class="lede">Model v 3D — <b>aj viac súborov naraz</b>, umiestnených v spoločných súradniciach projektu, aby sa dali skontrolovať kolízie a nadväznosti profesií. Pri <b>IFC 4.3</b> sa vykreslí os trasy (<code>IfcAlignment</code>) so staničením a v ľubovoľnom staničení sa urobí <b>priečny rez</b> cez všetky načítané modely. Súbory zostávajú vo vašom počítači — z internetu sa sťahujú len knižnice three.js a web-ifc.</p>
+    <p class="lede">Model v 3D — <b>aj viac súborov naraz</b>, umiestnených v spoločných súradniciach projektu, aby sa dali skontrolovať kolízie a nadväznosti profesií. Pri <b>IFC 4.3</b> aj <b>LandXML</b> sa vykreslí os trasy (<code>IfcAlignment</code>, <code>Alignment</code>) so staničením a v ľubovoľnom staničení sa urobí <b>priečny rez</b> cez všetky načítané modely. Súbory zostávajú vo vašom počítači — z internetu sa sťahujú len knižnice three.js a web-ifc.</p>
   </section>
 
   <!-- nahranie súborov -->
@@ -393,7 +393,7 @@
     <div class="panel__head">
       <span class="panel__tag">modely</span>
       <span class="panel__title" id="mdTitle">nahrajte jeden alebo viac IFC</span>
-      <span class="panel__sub">.ifc · IFC2x3 · IFC4 · IFC4.3</span>
+      <span class="panel__sub">.ifc · IFC2x3 · IFC4 · IFC4.3 · LandXML</span>
     </div>
     <div class="panel__body" id="mdBody"></div>
   </section>
@@ -415,8 +415,11 @@
       <button class="toolbtn" id="mdIso" title="Axonometria">3D</button>
       <button class="toolbtn" id="mdTop" title="Pôdorys — sever hore">zhora</button>
       <span class="md__sep"></span>
+      <button class="toolbtn" id="mdMeasure" title="Meranie vzdialeností a súradnice (M) — 1. klik bod, 2. klik vzdialenosť. Prichytáva sa k rohom, stredom a hranám objektov. Esc zruší.">merať</button>
+      <span class="md__sep"></span>
       <button class="toolbtn" id="mdColor" title="Každý model jednou farbou — na koordináciu">farba podľa modelu</button>
       <button class="toolbtn" id="mdGhost" title="Priehľadné modely — vidno os a rez">priehľadne</button>
+      <button class="toolbtn" id="mdQuality" title="Jemnejšie oblé tvary a vyhladené hrany. Pri veľmi veľkých modeloch vypnite — načítanie je rýchlejšie a pohyb plynulejší.">vysoká kvalita</button>
       <details class="pop md-geo" id="mdGeo">
         <summary id="mdGeoBtn" title="Terén, ortofotomapa a mapa pod modelom (ČÚZK, ZBGIS)">terén a mapa</summary>
         <div class="pop__body md-geo__body" id="mdGeoBody"></div>
@@ -429,6 +432,8 @@
       <aside class="md__left" id="mdLeft"></aside>
       <div class="md__view" id="mdView">
         <div class="md__busy" id="mdBusy" hidden><div class="spinner"></div><span class="md__busyT"></span></div>
+        <div class="mm md-meas" id="mdMeas" hidden></div>
+        <div class="mm-snap" id="mdSnap" hidden></div>
       </div>
       <aside class="vw__side md__side">
         <button class="md__sideX" id="mdSideX" title="Skryť panel vlastností (P)">skryť ›</button>
@@ -470,6 +475,9 @@
         <canvas id="secCanvas"></canvas>
         <span class="sec__cur" id="secCursor"></span>
         <button class="minibtn sec__fit" id="secFit" title="Celý rez (dvojklik)">celý rez</button>
+        <button class="minibtn sec__mbtn" id="secMeasBtn" title="Meranie a súradnice v reze — 1. klik bod, 2. klik vzdialenosť. Prichytáva sa k rohom, stredom a hranám obrysov. Esc zruší.">merať</button>
+        <div class="mm sec__meas" id="secMeas" hidden></div>
+        <div class="mm-snap" id="secSnap" hidden></div>
       </div>
       <aside class="sec__info">
         <div id="secInfo"></div>
@@ -506,7 +514,7 @@
 <input type="file" id="fileV" accept=".ifc,.IFC,.step,.stp" hidden>
 <input type="file" id="fileC" accept=".ifc,.IFC,.step,.stp" hidden>
 <input type="file" id="fileI" accept=".ids,.IDS,.xml" hidden>
-<input type="file" id="fileM" accept=".ifc,.IFC" multiple hidden>
+<input type="file" id="fileM" accept=".ifc,.IFC,.xml,.XML,.landxml" multiple hidden>
 
 <!-- jadro zlúčenia — načítané aj tu, aby fungoval núdzový režim bez Web Workera -->
 <script src="js/ifc-merge.js"></script>
@@ -524,6 +532,7 @@
 <!-- 3D prehliadač — trasa IFC 4.3 a samotný prehliadač (three.js a web-ifc sa dotiahnu až pri použití) -->
 <script src="js/ifc-alignment.js"></script>
 <script src="js/ifc-geo.js"></script>
+<script src="js/landxml.js"></script>
 <script src="js/model.js"></script>
 <!-- prepínanie nástrojov -->
 <script src="js/nav.js"></script>

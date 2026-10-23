@@ -611,6 +611,48 @@ details.adv[open] > summary::before{content:"–"}
 .chk__fix a{color:var(--check);white-space:nowrap}
 @media (max-width:560px){ .chk__fix{flex-direction:column;gap:3px} }
 
+.mdm__warn{color:var(--warn);cursor:help}
+
+/* meranie a súradnice — 3D aj rez */
+.md__view.is-measure canvas,.sec__wrap.is-measure canvas{cursor:crosshair}
+.mm{position:absolute;z-index:6;background:rgba(255,255,255,.96);border:1px solid var(--line-strong);
+  box-shadow:0 1px 6px rgba(0,0,0,.08);padding:4px 7px 5px;font-family:var(--mono);font-size:10.5px;
+  line-height:1.35;width:max-content;max-width:min(330px,calc(100% - 20px));max-height:calc(100% - 20px);overflow:auto}
+.md-meas{left:10px;bottom:10px}
+.sec__meas{right:10px;bottom:22px}
+.sec__mbtn{position:absolute;right:10px;top:54px}
+.sec__mbtn.is-on,#mdMeasure.is-on{background:#0B7A75;color:#fff;border-color:#0B7A75}
+.mm__bar{display:flex;align-items:center;gap:5px;margin-bottom:2px}
+.mm__ttl{font-weight:600;color:#0B7A75}
+.mm__crs{flex:1;color:var(--faint)}
+.mm__b{font:inherit;font-size:10px;line-height:1.4;border:1px solid var(--line-strong);background:var(--surface);
+  color:var(--muted);padding:0 5px;cursor:pointer}
+.mm__b:hover{color:var(--ink);background:var(--paper)}
+.mm__p{display:flex;gap:6px;align-items:flex-start;padding:2px 0;border-top:1px dotted var(--line)}
+.mm__t{font-weight:600;color:#0B7A75;width:10px;flex:none}
+.mm__ls{flex:1;min-width:0}
+.mm__l{color:var(--ink);white-space:nowrap}
+.mm__l2{color:var(--muted)}
+.mm__s{font-size:9.5px;color:var(--faint);flex:none}
+.mm__d{border-top:1px solid #0B7A75;margin-top:2px;padding-top:2px;display:flex;flex-direction:column}
+.mm__d b{font-size:12.5px;color:#0B7A75}
+.mm__d span{color:var(--muted)}
+.mm__hint{color:var(--faint);border-top:1px dotted var(--line);padding-top:2px}
+.md-mlab{font-family:var(--mono);font-size:11px;font-weight:600;color:#0B7A75;background:rgba(255,255,255,.92);
+  border:1px solid #0B7A75;padding:0 5px;white-space:nowrap;pointer-events:none;transform:translateY(-14px)}
+.md-mlab--pt{border:none;background:none;transform:translate(8px,-12px)}
+
+/* ukazovateľ prichytenia (ako v CAD): štvorec roh, trojuholník stred, kosoštvorec hrana, krúžok plocha */
+.mm-snap{position:absolute;left:-6px;top:-6px;width:12px;height:12px;z-index:7;pointer-events:none;
+  border:2px solid #0B7A75;box-sizing:border-box}
+.mm-snap--corner{background:rgba(11,122,117,.15)}
+.mm-snap--edge{border:none}
+.mm-snap--edge::after{content:"";position:absolute;inset:1px;border:2px solid #C2571A;transform:rotate(45deg)}
+.mm-snap--mid{border:none;width:14px;height:12px;left:-7px;background:#0B7A75;
+  clip-path:polygon(50% 0,100% 100%,0 100%,50% 0,50% 30%,22% 82%,78% 82%,50% 30%)}
+.mm-snap--face{border-radius:50%;border-color:var(--muted);width:10px;height:10px;left:-5px;top:-5px}
+.mm-snap--axis{border-radius:50%;border-color:#D0216A}
+
 /* hĺbková kontrola */
 .deep__body{padding:16px;display:flex;flex-direction:column;gap:12px}
 .deep__body .help{margin:0}
@@ -1024,6 +1066,7 @@ details.pop.is-on > summary{background:var(--secondary);border-color:var(--secon
 .sec__range{width:100%;margin:0;display:block;accent-color:var(--model);padding:4px 14px;box-sizing:border-box;background:var(--surface)}
 .sec__main{display:grid;grid-template-columns:minmax(0,1fr) 280px;border-top:1px solid var(--line)}
 .sec__wrap{position:relative;height:46vh;min-height:320px;border-right:1px solid var(--line-strong);overflow:hidden}
+#mdSec.is-long .sec__wrap{height:66vh;min-height:560px}
 .sec__wrap canvas{display:block;cursor:crosshair;touch-action:none}
 .sec__cur{position:absolute;left:10px;bottom:22px;font-family:var(--mono);font-size:10.5px;color:var(--muted);
   background:rgba(252,252,250,.9);padding:1px 5px;pointer-events:none}

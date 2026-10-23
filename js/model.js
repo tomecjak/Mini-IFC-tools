@@ -13,19 +13,33 @@
  * staničení sa urobí priečny rez — zvislá rovina kolmá na smer trasy. Rez sa
  * počíta priamo z trojuholníkov modelov a kreslí sa v 2D (odsun od osi × výška).
  * Jadro trasy je v js/ifc-alignment.js.
+ *
+ * LandXML (.xml): trasy a povrchy TIN z js/landxml.js. Súradnice sú v mapovom
+ * systéme — ak je známe georeferencovanie IFC (IfcMapConversion alebo ručne),
+ * prevedú sa ním do súradníc projektu, inak sa berú priamo. Trasa ide cez to
+ * isté jadro ako IFC 4.3, takže rezy a pozdĺžny profil fungujú rovnako.
  */
 (function () {
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   var AL = window.IFCAlignment;
+  var LX = window.LandXML;
 
   var WASM_PATH = "https://cdn.jsdelivr.net/npm/web-ifc@0.0.77/";
   // farby modelov v režime „farba podľa modelu“ — dobre rozlíšiteľné aj vedľa seba
   var MODEL_COLORS = ["#2F6FB0", "#C2571A", "#2E8B57", "#8E44AD", "#B8860B", "#C0392B", "#16A085", "#5D6D7E"];
   var HILITE = 0xF2A900;           // vybraný prvok
   var AXIS_COLOR = 0xD0216A;       // os trasy
+  var MEAS_COLOR = 0x0B7A75;       // meranie
   var CHUNK_MAX_VERTS = 1500000;   // jeden blok geometrie (ostatné sa pridajú do ďalšieho)
   var HIDDEN_BY_DEFAULT = { IFCSPACE: 1, IFCOPENINGELEMENT: 1, IFCVIRTUALELEMENT: 1, IFCANNOTATION: 1 };
+  // povrchy z LandXML — zemité odtiene, aby sa odlíšili od konštrukcií
+  var SURFACE_COLORS = ["#A8957A", "#8FA37A", "#9A8FB0", "#B59A6A", "#7FA0A8"];
+  var LX_CLS = "LXSURFACE";
+  // kvalita kreslenia: segs = počet úsečiek na kružnicu pri teselácii web-ifc
+  // (predvolene 12 — oblé prvky sú hranaté), ss = najmenšie prevzorkovanie plátna
+  // (2 = aj na bežnom monitore sa kreslí v dvojnásobnom rozlíšení a zmenšuje sa)
+  var QUALITY = { high: { segs: 36, ss: 2 }, fast: { segs: 12, ss: 1 } };
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
@@ -39,6 +53,7 @@
   function pretty(t) { return String(t || "").replace(/^IFC/, "Ifc"); }
   function prettyCls(t) {
     // IFCWALLSTANDARDCASE → IfcWallStandardCase podľa registra schémy, ak ho poznáme
+    if (t === LX_CLS) return "povrch TIN (LandXML)";
     var D = window.IFCDocs, n = D && D.nameOf ? D.nameOf(t) : null;
     return n || pretty(t);
   }
@@ -84,6 +99,7 @@
     colorMode: "file",   // file | model
     ghost: false,
     sideOpen: readPref("md.side", "1") === "1",   // panel vlastností
+    quality: readPref("md.quality", "high") === "fast" ? "fast" : "high",   // kvalita kreslenia (QUALITY)
     geo: {
       georef: null,      // súradnice projektu ↔ mapa (js/ifc-geo.js)
       manual: false,     // georeferencovanie zadané ručne — nové modely ho neprepíšu
@@ -100,7 +116,8 @@
       mode: "cross",     // cross = priečny rez · long = pozdĺžny profil
       exag: 10,          // prevýšenie výšok v profile
       prof: null,        // vypočítaný pozdĺžny profil (zneplatní sa pri zmene viditeľnosti)
-      pview: null        // { sx, cs, cv } — mierka a stred profilu
+      pview: null,       // { sx, cs, cv } — mierka a stred profilu
+      meas: { on: false, pts: [] }   // meranie v reze / profile (body [u, v])
     }
   };
 
@@ -109,11 +126,18 @@
   // =========================================================================
   //  Scéna
   // =========================================================================
+  // pomer pixelov plátna — pri vysokej kvalite aj prevzorkovanie (vyhladí hrany)
+  function pixelRatio() {
+    var d = window.devicePixelRatio || 1;
+    return Math.min(Math.max(d, QUALITY[st.quality].ss), 3);
+  }
+
   function initScene() {
     if (three) return;
     var T = Lib.T, host = $("mdView");
-    var renderer = new T.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // logaritmická hĺbka — pri dlhých stavbách (stovky metrov) inak blikajú blízke plochy
+    var renderer = new T.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false, logarithmicDepthBuffer: true });
+    renderer.setPixelRatio(pixelRatio());
     renderer.localClippingEnabled = true;
     renderer.setClearColor(0xF3F2EE, 1);
     host.insertBefore(renderer.domElement, host.firstChild);
@@ -228,17 +252,21 @@
     };
   }
 
+  function isLandXml(file) { return /\.(xml|landxml)$/i.test(file.name); }
+
   function loadModel(file, onStep) {
+    if (isLandXml(file)) return loadLandXml(file, onStep);
     var T = Lib.T;
     return file.arrayBuffer().then(function (buf) {
       onStep("spracúva sa geometria…");
       return new Promise(function (r) { setTimeout(r, 30); }).then(function () { return buf; });
     }).then(function (buf) {
-      var modelID = api.OpenModel(new Uint8Array(buf), { COORDINATE_TO_ORIGIN: true });
+      var segs = QUALITY[st.quality].segs;
+      var modelID = api.OpenModel(new Uint8Array(buf), { COORDINATE_TO_ORIGIN: true, CIRCLE_SEGMENTS: segs });
       if (modelID < 0) throw new Error("Súbor sa nepodarilo otvoriť.");
       var schema = api.GetModelSchema(modelID) || "";
       var m = {
-        uid: ++st.uid, name: file.name, file: file, size: file.size, modelID: modelID, schema: schema,
+        uid: ++st.uid, name: file.name, file: file, size: file.size, modelID: modelID, schema: schema, segs: segs,
         color: MODEL_COLORS[(st.uid - 1) % MODEL_COLORS.length], visible: true,
         group: new T.Group(), chunks: [], products: new Map(), classes: new Map(), alignments: [],
         Mi: new T.Matrix4(), bbox: new T.Box3()
@@ -353,6 +381,189 @@
       m.bbox.setFromObject(m.group);
       return m;
     });
+  }
+
+  // ---- LandXML ------------------------------------------------------------
+  function loadLandXml(file, onStep) {
+    return file.text().then(function (text) {
+      onStep("čítajú sa trasy a povrchy…");
+      return new Promise(function (r) { setTimeout(r, 30); }).then(function () { return text; });
+    }).then(function (text) {
+      var d = LX.parse(text);
+      if (!d.alignments.length && !d.surfaces.length) throw new Error("LandXML neobsahuje trasu ani povrch TIN.");
+      var T = Lib.T;
+      var m = {
+        uid: ++st.uid, name: file.name, file: file, size: file.size, modelID: null,
+        schema: "LandXML" + (d.version ? " " + d.version : ""), lx: d,
+        color: MODEL_COLORS[(st.uid - 1) % MODEL_COLORS.length], visible: true,
+        group: new T.Group(), chunks: [], products: new Map(), classes: new Map(), alignments: [],
+        Mi: new T.Matrix4(), bbox: new T.Box3(), map: null
+      };
+      lxCrs(m);
+      placeLandXml(m);
+      three.scene.add(m.group);
+      return m;
+    });
+  }
+
+  /* Súradnicový systém LandXML. Hlavičke sa neverí naslepo — Civil 3D píše pri
+     S-JTSK často EPSG:2065 (súradnice kladné, osi na juh a západ), hoci súradnice
+     sú v EPSG:5514 (záporné, východ a sever). Rozhodujú súradnice: záporné
+     v rozsahu S-JTSK → EPSG:5514; kladné pri systéme S-JTSK → preklopia sa
+     do EPSG:5514 (lxFlip); inak platí kód z hlavičky. */
+  var JTSK_CODES = { "EPSG:2065": 1, "EPSG:5513": 1, "EPSG:5514": 1, "EPSG:5221": 1, "EPSG:102066": 1, "EPSG:102067": 1 };
+  function lxCrs(m) {
+    var d = m.lx, c = d.crs, code = c && c.code || "";
+    var p = d.alignments.length ? [d.alignments[0].hs[0].x, d.alignments[0].hs[0].y]
+          : d.surfaces.length ? [d.surfaces[0].pos[0], d.surfaces[0].pos[1]] : null;
+    var named = JTSK_CODES[code] || (c && /JTSK|K[rř]ov[aá]k/i.test(c.name || ""));
+    m.lxFlip = false; m.lxCode = code; m.lxNote = "";
+    if (p && G && G.looksLikeJtsk(p[0], p[1], p[0], p[1])) m.lxCode = "EPSG:5514";
+    else if (p && named && G && G.looksLikeJtsk(-p[0], -p[1], -p[0], -p[1])) { m.lxCode = "EPSG:5514"; m.lxFlip = true; }
+    if (code && m.lxCode !== code)
+      m.lxNote = "hlavička uvádza " + code + ", súradnice zodpovedajú S-JTSK EPSG:5514" +
+                 (m.lxFlip ? " — preklopené zo systému s kladnými súradnicami" : "");
+  }
+
+  /* Mapové súradnice LandXML → súradnice projektu (4×4 po stĺpcoch, ako v ifc-alignment.js).
+     Inverzia georeferencovania z js/ifc-geo.js (toLocal); bez neho identita.
+     Preklopenie kladného S-JTSK je otočenie o 180° okolo počiatku (E, N → −E, −N). */
+  function landXmlMatrix(m) {
+    var g = st.geo.georef, M = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    if (g) {
+      var c = g.cos / g.scale, sn = g.sin / g.scale;
+      M = [c, -sn, 0, 0, sn, c, 0, 0, 0, 0, 1, 0,
+           -(c * g.e0 + sn * g.n0), -(-sn * g.e0 + c * g.n0), -g.h0, 1];
+    }
+    if (m && m.lxFlip) { M[0] = -M[0]; M[1] = -M[1]; M[4] = -M[4]; M[5] = -M[5]; }
+    return M;
+  }
+  function matrixKey(M) { return M.map(function (x) { return x.toFixed(6); }).join(","); }
+
+  /* Geometria LandXML v scéne. Volá sa aj znova, keď sa zmení georeferencovanie
+     (napr. IFC s IfcMapConversion nahratý až po LandXML) — trasy a povrchy sa
+     preložia, aby sedeli s ostatnými modelmi. */
+  function placeLandXml(m) {
+    var T = Lib.T, d = m.lx, M = landXmlMatrix(m);
+    m.lxKey = matrixKey(M);
+    var g = st.geo.georef, code = m.lxCode;
+    m.lxWarn = g && code && g.crs && code !== g.crs
+      ? "LandXML je v " + code + ", georeferencovanie modelov v " + g.crs + " — nemusia na seba sedieť" : "";
+
+    var reopen = st.sec.al && st.sec.al.m === m ? m.alignments.indexOf(st.sec.al.a) : -1;
+    if (reopen >= 0) closeSection();
+    if (st.sel && st.sel.m === m) select(null);
+    while (m.group.children.length) {
+      var old = m.group.children.pop();
+      old.traverse(function (o) {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+        if (o.element && o.element.parentNode) o.element.parentNode.removeChild(o.element);
+      });
+    }
+    m.chunks = []; m.products = new Map(); m.alignments = [];
+
+    // body povrchov v súradniciach projektu + trasy (tie prevádza samo jadro trasy)
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    function grow(x, y, z) {
+      if (x < lo[0]) lo[0] = x; if (y < lo[1]) lo[1] = y; if (z < lo[2]) lo[2] = z;
+      if (x > hi[0]) hi[0] = x; if (y > hi[1]) hi[1] = y; if (z > hi[2]) hi[2] = z;
+    }
+    var proj = d.surfaces.map(function (sf) {
+      var P = sf.pos, out = new Float64Array(P.length);
+      for (var i = 0; i < P.length; i += 3) {
+        var E = P[i], N = P[i + 1], H = P[i + 2];
+        out[i] = M[0] * E + M[4] * N + M[12];
+        out[i + 1] = M[1] * E + M[5] * N + M[13];
+        out[i + 2] = H + M[14];
+        grow(out[i], out[i + 1], out[i + 2]);
+      }
+      return out;
+    });
+    var als = [];
+    d.alignments.forEach(function (x) {
+      var a = AL.buildAlignment({ name: x.name, hs: x.hs, vs: x.vs, startStation: x.staStart, matrix: M });
+      if (!a) return;
+      a.speeds = x.speeds; a.speedUnit = x.speedUnit;
+      [0, a.length / 2, a.length].forEach(function (t) { var p = a.pointAt(t); grow(p.x, p.y, p.z); });
+      als.push(a);
+    });
+
+    // posun k stredu — súradnice v S-JTSK sú na float32 príliš veľké (ako COORDINATE_TO_ORIGIN)
+    var cx = (lo[0] + hi[0]) / 2, cy = (lo[1] + hi[1]) / 2, cz = isFinite(lo[2]) ? (lo[2] + hi[2]) / 2 : 0;
+    m.Mi.makeTranslation(-cx, -cz, cy);
+    if (!st.origin) st.origin = m.Mi.clone();
+    m.group.matrixAutoUpdate = false;
+    m.group.matrix.copy(st.origin).multiply(m.Mi.clone().invert());
+    m.group.updateMatrixWorld(true);
+
+    d.surfaces.forEach(function (sf, si) {
+      var src = proj[si], n = src.length / 3, id = si + 1;
+      var pos = new Float32Array(n * 3), col = new Float32Array(n * 4);
+      var hex = parseInt(SURFACE_COLORS[si % SURFACE_COLORS.length].slice(1), 16);
+      var rgb = [(hex >> 16 & 255) / 255, (hex >> 8 & 255) / 255, (hex & 255) / 255, 1];
+      var bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+      for (var k = 0; k < n; k++) {
+        // IFC (x, y, z hore) → scéna (x, z, −y), posunuté o Mi
+        var X = src[k * 3] - cx, Y = src[k * 3 + 2] - cz, Z = -src[k * 3 + 1] + cy;
+        pos[k * 3] = X; pos[k * 3 + 1] = Y; pos[k * 3 + 2] = Z;
+        col.set(rgb, k * 4);
+        if (X < bb[0]) bb[0] = X; if (Y < bb[1]) bb[1] = Y; if (Z < bb[2]) bb[2] = Z;
+        if (X > bb[3]) bb[3] = X; if (Y > bb[4]) bb[4] = Y; if (Z > bb[5]) bb[5] = Z;
+      }
+      var geo = new T.BufferGeometry();
+      geo.setAttribute("position", new T.BufferAttribute(pos, 3));
+      geo.setAttribute("color", new T.BufferAttribute(col, 4));
+      geo.setIndex(new T.BufferAttribute(sf.idx.slice(), 1));
+      geo.computeVertexNormals(); geo.computeBoundingBox(); geo.computeBoundingSphere();
+      var mat = new T.MeshLambertMaterial({ vertexColors: true, side: T.DoubleSide,
+        polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
+      var ch = { m: m, cls: LX_CLS, transparent: false, posA: pos, idxA: sf.idx, colA: col,
+                 ranges: [{ start: 0, count: sf.idx.length, id: id }], mesh: null };
+      ch.mesh = new T.Mesh(geo, mat);
+      ch.mesh.userData.ch = ch;
+      m.group.add(ch.mesh);
+      m.chunks.push(ch);
+      m.products.set(id, { id: id, cls: LX_CLS, parts: [{ ch: ch, start: 0, count: sf.idx.length }], bb: bb,
+        color: rgb, name: sf.name, info: sf });
+    });
+    var c = m.classes.get(LX_CLS);
+    if (m.products.size) m.classes.set(LX_CLS, { n: m.products.size, visible: c ? c.visible : true });
+    else m.classes.delete(LX_CLS);
+
+    als.forEach(function (a, i) {
+      a.visible = true; a.key = m.uid + ":" + i;
+      buildAxis(m, a);
+      m.alignments.push(a);
+    });
+    m.names = null;
+    m.bbox.setFromObject(m.group);
+    if (reopen >= 0 && m.alignments[reopen]) openSection(m, m.alignments[reopen]);
+  }
+
+  // upozornenia k LandXML — z čítania súboru a k súradnicovému systému
+  function lxNotes(m) { return (m.lxNote ? [m.lxNote] : []).concat(m.lx.warnings); }
+
+  // návrhová rýchlosť (LandXML) — v danom staničení a súhrn za celú trasu
+  function speedAt(a, stn) {
+    var v = null;
+    (a.speeds || []).forEach(function (s) { if (v == null || s.station <= stn + 1e-6) v = s.speed; });
+    return v;
+  }
+  function speedRange(a) {
+    if (!a.speeds || !a.speeds.length) return "";
+    var v = a.speeds.map(function (s) { return s.speed; });
+    var lo = Math.min.apply(null, v), hi = Math.max.apply(null, v);
+    return fmt(lo, 0) + (hi > lo ? "–" + fmt(hi, 0) : "") + " " + a.speedUnit;
+  }
+
+  /* Po zmene georeferencovania preloží LandXML, ktoré boli umiestnené podľa iného. */
+  function syncLandXml() {
+    var moved = false;
+    st.models.forEach(function (m) {
+      if (m.lx && m.lxKey !== matrixKey(landXmlMatrix(m))) { placeLandXml(m); moved = true; }
+    });
+    return moved;
   }
 
   /* IFC (m, Z hore) → lokálne súradnice skupiny modelu (Y hore, posunuté ako web-ifc). */
@@ -585,9 +796,21 @@
     el.addEventListener("pointerup", function (e) {
       if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4 || e.button !== 0) { down = null; return; }
       down = null;
+      if (meas.on) { measureClick(e); return; }
       var h = pick(e);
       if (h) select(h.m, h.id); else select(null);
     });
+    // v režime merania ukazuje, k čomu sa bod prichytí (raz za snímku)
+    var hover = null;
+    el.addEventListener("pointermove", function (e) {
+      if (!meas.on || e.buttons) { showSnap($("mdSnap"), 0, 0, null); return; }
+      var first = !hover; hover = e;
+      if (first) requestAnimationFrame(function () {
+        var h = hover && pickPoint(hover); hover = null;
+        if (h) showSnap($("mdSnap"), h.x, h.y, h.snap); else showSnap($("mdSnap"), 0, 0, null);
+      });
+    });
+    el.addEventListener("pointerleave", function () { showSnap($("mdSnap"), 0, 0, null); });
     el.addEventListener("dblclick", function (e) {
       var h = pick(e);
       if (!h) return;
@@ -595,6 +818,410 @@
       three.controls.update();
       requestRender();
     });
+  }
+
+  // =========================================================================
+  //  Meranie a súradnice
+  // =========================================================================
+  /* Jeden nástroj v 3D aj v reze či profile: 1. klik ukáže súradnice bodu,
+     2. klik pridá druhý bod a vzdialenosti, 3. klik začne nové meranie.
+     Body sa prichytávajú k najbližšiemu vrcholu (SNAP_PX). Esc meranie zruší. */
+  var SNAP_PX = 10;
+  var meas = { on: false, pts: [], obj: null };          // 3D
+
+  /* Bod v súradniciach projektu → všetko, čo sa o ňom dá povedať: projekt,
+     mapové súradnice (georeferencovanie) a poloha voči trase. */
+  function pointInfo(x, y, z) {
+    var out = { x: x, y: y, z: z };
+    var g = st.geo.georef;
+    if (g) {
+      var mp = g.toMap(x, y, z);
+      out.E = mp[0]; out.N = mp[1]; out.H = mp[2]; out.crs = g.crs;
+      // georeferencovanie bez posunu a otočenia — projekt je priamo mapa
+      out.same = !g.e0 && !g.n0 && !g.h0 && g.cos === 1 && g.scale === 1;
+    }
+    var A = st.sec.al || firstAlignment();
+    if (A) {
+      var r = stationAt(A.a, x, y, z);
+      if (r) { out.km = r.station; out.off = r.offset; out.dz = r.dz; out.inside = r.inside; out.al = A.a.name; }
+    }
+    return out;
+  }
+  function firstAlignment() {
+    for (var i = 0; i < st.models.length; i++) if (st.models[i].alignments.length) return { m: st.models[i], a: st.models[i].alignments[0] };
+    return null;
+  }
+
+  /* Kolmý priemet bodu na os trasy: staničenie, odsun (+ vpravo v smere
+     staničenia, ako v reze) a výška nad niveletou. Hrubo po zahustených bodoch,
+     potom niekoľko krokov Newtonovej metódy. */
+  function stationAt(a, x, y, z) {
+    var S = a._near || (a._near = a.sample(Math.max(0.5, Math.min(5, a.length / 2000))));
+    var best = Infinity, d = 0;
+    for (var i = 0; i < S.length - 1; i++) {
+      var p = S[i], q = S[i + 1], dx = q.x - p.x, dy = q.y - p.y, l2 = dx * dx + dy * dy;
+      var t = l2 ? Math.max(0, Math.min(1, ((x - p.x) * dx + (y - p.y) * dy) / l2)) : 0;
+      var ex = p.x + dx * t - x, ey = p.y + dy * t - y, e2 = ex * ex + ey * ey;
+      if (e2 < best) { best = e2; d = p.dist + (q.dist - p.dist) * t; }
+    }
+    for (var k = 0; k < 5; k++) {
+      var c0 = a.pointAt(d);
+      d = Math.max(0, Math.min(a.length, d + (x - c0.x) * c0.tx + (y - c0.y) * c0.ty));
+    }
+    var c = a.pointAt(d);
+    return { station: c.station, offset: (x - c.x) * c.ty - (y - c.y) * c.tx,
+             dz: c.hasZ ? z - c.z : null, inside: d > 1e-6 && d < a.length - 1e-6 };
+  }
+
+  // ---- výpis merania (kompaktný) --------------------------------------------
+  function sgn(v, d) { return (v >= 0 ? "+" : "") + fmt(v, d); }
+  var SNAP_LABEL = { corner: "roh", mid: "stred hrany", edge: "hrana", face: "plocha", axis: "os" };
+
+  // bod na dva riadky: súradnice (mapové, inak projektu) a poloha voči trase
+  function pointLines(P) {
+    var l = [P.E != null ? "E " + fmt(P.E, 3) + "  N " + fmt(P.N, 3) + "  H " + fmt(P.H, 3)
+                         : "X " + fmt(P.x, 3) + "  Y " + fmt(P.y, 3) + "  Z " + fmt(P.z, 3)];
+    if (P.km != null) l.push("km " + AL.formatStation(P.km, 3) + "  " + sgn(P.off, 3) + " m" +
+      (P.dz != null ? "  niv. " + sgn(P.dz, 3) : "") + (P.inside ? "" : "  (mimo trasy)"));
+    return l;
+  }
+  // vzdialenosť: hlavná hodnota a doplnky
+  function distLine(A, B, long) {
+    if (long) {
+      var ds = B.q[0] - A.q[0], dv = B.q[1] - A.q[1];
+      return { main: "Δkm " + fmt(Math.abs(ds), 3) + " m",
+               sub: "Δv " + sgn(dv, 3) + (Math.abs(ds) > 1e-6 ? " · " + fmt(dv / ds * 100, 3) + " %" : "") };
+    }
+    var dx = B.x - A.x, dy = B.y - A.y, dz = B.z - A.z, h = Math.hypot(dx, dy);
+    var sub = ["vodor. " + fmt(h, 3), "Δv " + sgn(dz, 3)];
+    if (h > 1e-6) sub.push(fmt(dz / h * 100, 2) + " %");
+    if (A.km != null && B.km != null) sub.push("Δkm " + fmt(B.km - A.km, 3), "Δods. " + sgn(B.off - A.off, 3));
+    return { main: fmt(Math.hypot(h, dz), 3) + " m", sub: sub.join(" · ") };
+  }
+
+  /* Okno merania: lišta (systém, kopírovať, zrušiť), body A, B a vzdialenosť. */
+  var measText = "";
+  function measHTML(pts, long) {
+    if (!pts.length) return "";
+    var crs = pts[0].E != null ? (pts[0].crs === "EPSG:5514" ? "S-JTSK" : pts[0].crs) : "súradnice projektu";
+    var html = '<div class="mm__bar"><span class="mm__ttl">meranie</span><span class="mm__crs">' + esc(crs) + "</span>" +
+      '<button class="mm__b" data-mm="copy" title="Kopírovať hodnoty">kopírovať</button>' +
+      '<button class="mm__b" data-mm="clear" title="Zrušiť meranie (Esc)">×</button></div>';
+    var text = [crs];
+    pts.forEach(function (P, i) {
+      var L = pointLines(P);
+      html += '<div class="mm__p"><span class="mm__t">' + "AB"[i] + "</span>" +
+        '<div class="mm__ls">' + L.map(function (l, k) { return '<div class="mm__l' + (k ? " mm__l2" : "") + '">' + esc(l) + "</div>"; }).join("") + "</div>" +
+        (P.snap ? '<span class="mm__s">' + esc(SNAP_LABEL[P.snap] || P.snap) + "</span>" : "") + "</div>";
+      text.push("AB"[i] + ": " + L.join(" | "));
+    });
+    if (pts.length === 2) {
+      var D = distLine(pts[0], pts[1], long);
+      html += '<div class="mm__d"><b>' + esc(D.main) + '</b><span>' + esc(D.sub) + "</span></div>";
+      text.push("vzdialenosť: " + D.main + " | " + D.sub);
+    } else html += '<div class="mm__hint">kliknite na druhý bod</div>';
+    measText = text.join("\n").replace(/[  ]/g, " ");
+    return html;
+  }
+  function copyMeas(btn) {
+    var done = function () { btn.textContent = "skopírované"; setTimeout(function () { btn.textContent = "kopírovať"; }, 1200); };
+    try { navigator.clipboard.writeText(measText).then(done, function () {}); } catch (e) { /* bez schránky */ }
+  }
+
+  // ukazovateľ prichytenia pod kurzorom — štvorec roh, trojuholník stred,
+  // kosoštvorec hrana, krúžok plocha (ako v CAD)
+  function showSnap(el, x, y, type) {
+    if (!type) { el.hidden = true; return; }
+    el.hidden = false;
+    el.className = "mm-snap mm-snap--" + type;
+    el.style.transform = "translate(" + Math.round(x) + "px," + Math.round(y) + "px)";
+    el.title = SNAP_LABEL[type] || "";
+  }
+
+  /* Hrany telesa, ktoré naozaj vidieť: obrys plochy (hrana len jedného
+     trojuholníka) a lom (susedné plochy zvierajú viac ako 20°). Uhlopriečky
+     z triangulácie rovinných plôch medzi ne nepatria. Počíta sa až pri prvom
+     prichytení k prvku a pamätá sa pri ňom. */
+  var FEATURE_COS = Math.cos(20 * Math.PI / 180);
+  function featureEdges(prod) {
+    if (prod._fe) return prod._fe;
+    var map = new Map(), segs = [];
+    function k(P, i) { return Math.round(P[i] * 1e4) + "," + Math.round(P[i + 1] * 1e4) + "," + Math.round(P[i + 2] * 1e4); }
+    prod.parts.forEach(function (pt) {
+      var P = pt.ch.posA, I = pt.ch.idxA;
+      for (var t = pt.start; t < pt.start + pt.count; t += 3) {
+        var a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+        var ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2];
+        var vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2];
+        var nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, nl = Math.hypot(nx, ny, nz);
+        if (nl < 1e-12) continue;
+        nx /= nl; ny /= nl; nz /= nl;
+        var ks = [k(P, a), k(P, b), k(P, c)], vs = [a, b, c];
+        for (var e = 0; e < 3; e++) {
+          var i1 = vs[e], i2 = vs[(e + 1) % 3], k1 = ks[e], k2 = ks[(e + 1) % 3];
+          if (k1 === k2) continue;
+          var key2 = k1 < k2 ? k1 + "|" + k2 : k2 + "|" + k1, E = map.get(key2);
+          if (!E) map.set(key2, { p: [P[i1], P[i1 + 1], P[i1 + 2], P[i2], P[i2 + 1], P[i2 + 2]], n: [nx, ny, nz], c: 1, f: false });
+          else {
+            E.c++;
+            // rovnaká orientácia aj opačná (obojstranné plochy) — rozhoduje uhol rovín
+            if (Math.abs(E.n[0] * nx + E.n[1] * ny + E.n[2] * nz) < FEATURE_COS) E.f = true;
+          }
+        }
+      }
+    });
+    map.forEach(function (E) { if (E.f || E.c !== 2) segs.push.apply(segs, E.p); });
+    prod._fe = new Float32Array(segs);
+    return prod._fe;
+  }
+
+  // ---- 3D ------------------------------------------------------------------
+  function setMeasure(on) {
+    meas.on = on;
+    $("mdMeasure").classList.toggle("is-on", on);
+    $("mdView").classList.toggle("is-measure", on);
+    if (!on) { clearMeas3D(); showSnap($("mdSnap"), 0, 0, null); }
+  }
+  function clearMeas3D() {
+    meas.pts = [];
+    drawMeas3D();
+    $("mdMeas").hidden = true;
+  }
+
+  /* Bod pod kurzorom s prichytením: roh telesa → stred hrany → bod na hrane →
+     plocha. Hľadá sa medzi skutočnými hranami zasiahnutého prvku (featureEdges). */
+  function pickPoint(ev) {
+    var T = Lib.T, rect = three.renderer.domElement.getBoundingClientRect();
+    var mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+    var ndc = new T.Vector2(mx / rect.width * 2 - 1, -my / rect.height * 2 + 1);
+    three.raycaster.setFromCamera(ndc, three.camera);
+    var meshes = [];
+    st.models.forEach(function (m) {
+      if (m.visible) m.chunks.forEach(function (ch) { if (ch.mesh.visible) meshes.push(ch.mesh); });
+    });
+    if (st.geo.mesh && st.geo.mesh.visible) meshes.push(st.geo.mesh);
+    var hits = three.raycaster.intersectObjects(meshes, false), h = null;
+    for (var i = 0; i < hits.length; i++) if (!clippedOut(hits[i].point) && hits[i].face) { h = hits[i]; break; }
+    if (!h) return null;
+
+    var ch = h.object.userData.ch, prod = null;
+    if (ch) prod = ch.m.products.get(rangeOfVertex(ch, h.object.geometry.index.array[h.faceIndex * 3]));
+    else if (st.geo.model && h.object === st.geo.mesh) prod = st.geo.model.products.get(1);
+    var Mw = h.object.matrixWorld, cam = three.camera;
+    function scr(x, y, z) {
+      var v = new T.Vector3(x, y, z).applyMatrix4(Mw), s = v.clone().project(cam);
+      return { v: v, x: (s.x + 1) / 2 * rect.width, y: (1 - s.y) / 2 * rect.height, ok: s.z < 1 };
+    }
+    var best = { d: SNAP_PX + 1, w: h.point.clone(), type: "face", x: mx, y: my };
+    if (prod) {
+      var E = featureEdges(prod);
+      // len hrany blízko zásahu — pri veľkých povrchoch ich sú státisíce
+      var inv = Mw.clone().invert(), hl = h.point.clone().applyMatrix4(inv);
+      var px = h.distance * Math.tan(cam.fov * Math.PI / 360) * 2 / rect.height;      // m na pixel v mieste zásahu
+      var R = px * SNAP_PX * 4, R2 = R * R;
+      var midBest = SNAP_PX * 0.8 + 1, edgeBest = SNAP_PX * 0.8 + 1, mid = null, edge = null;
+      for (var e = 0; e < E.length; e += 6) {
+        // rýchly test vzdialenosti úsečky od zásahu v priestore
+        var ax = E[e], ay = E[e + 1], az = E[e + 2], bx = E[e + 3], by = E[e + 4], bz = E[e + 5];
+        var dx = bx - ax, dy = by - ay, dz = bz - az, l2 = dx * dx + dy * dy + dz * dz;
+        var t = l2 ? Math.max(0, Math.min(1, ((hl.x - ax) * dx + (hl.y - ay) * dy + (hl.z - az) * dz) / l2)) : 0;
+        var qx = ax + dx * t - hl.x, qy = ay + dy * t - hl.y, qz = az + dz * t - hl.z;
+        if (qx * qx + qy * qy + qz * qz > R2) continue;
+        var A = scr(ax, ay, az), B = scr(bx, by, bz);
+        [A, B].forEach(function (P) {
+          var d = Math.hypot(P.x - mx, P.y - my);
+          if (P.ok && d < best.d && !clippedOut(P.v)) best = { d: d, w: P.v, type: "corner", x: P.x, y: P.y };
+        });
+        var M = scr((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2), dm = Math.hypot(M.x - mx, M.y - my);
+        if (M.ok && dm < midBest && !clippedOut(M.v)) { midBest = dm; mid = { w: M.v, type: "mid", x: M.x, y: M.y }; }
+        // najbližší bod úsečky na obrazovke
+        var sx = B.x - A.x, sy = B.y - A.y, s2 = sx * sx + sy * sy;
+        var u = s2 ? Math.max(0, Math.min(1, ((mx - A.x) * sx + (my - A.y) * sy) / s2)) : 0;
+        var de = Math.hypot(A.x + sx * u - mx, A.y + sy * u - my);
+        if (A.ok && B.ok && de < edgeBest) {
+          var W = A.v.clone().lerp(B.v, u);       // (v perspektíve len približne — na milimetre stačí)
+          if (!clippedOut(W)) { edgeBest = de; edge = { w: W, type: "edge", x: A.x + sx * u, y: A.y + sy * u }; }
+        }
+      }
+      if (best.type !== "corner") best = mid || edge || best;
+    }
+    return { w: best.w, snap: best.type, x: best.x, y: best.y };
+  }
+
+  function measureClick(ev) {
+    var h = pickPoint(ev);
+    if (!h) return;
+    if (meas.pts.length >= 2) meas.pts = [];
+    var p = worldToIfc(st.models[0], h.w), P = pointInfo(p[0], p[1], p[2]);
+    P.w = h.w; P.snap = h.snap;
+    meas.pts.push(P);
+    drawMeas3D();
+    var el = $("mdMeas");
+    el.innerHTML = measHTML(meas.pts, false);
+    el.hidden = false;
+  }
+
+  // body, spojnica a popis dĺžky v scéne — kreslia sa cez model (bez hĺbkového testu)
+  function drawMeas3D() {
+    if (!three) return;
+    var T = Lib.T;
+    if (meas.obj) {
+      three.scene.remove(meas.obj);
+      meas.obj.traverse(function (o) {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+        if (o.element && o.element.parentNode) o.element.parentNode.removeChild(o.element);
+      });
+      meas.obj = null;
+    }
+    if (meas.pts.length) {
+      var g = new T.Group(), ws = meas.pts.map(function (P) { return P.w; });
+      var pg = new T.BufferGeometry().setFromPoints(ws);
+      var pts = new T.Points(pg, new T.PointsMaterial({ color: MEAS_COLOR, size: 9, sizeAttenuation: false, depthTest: false, transparent: true }));
+      pts.renderOrder = 41;
+      g.add(pts);
+      ws.forEach(function (w, i) { g.add(label3D("AB"[i], w, "md-mlab md-mlab--pt")); });
+      if (ws.length === 2) {
+        var line = new T.Line(new T.BufferGeometry().setFromPoints(ws),
+          new T.LineDashedMaterial({ color: MEAS_COLOR, dashSize: 0.4, gapSize: 0.25, depthTest: false, transparent: true }));
+        line.computeLineDistances();
+        line.renderOrder = 40;
+        g.add(line);
+        var A = meas.pts[0], B = meas.pts[1];
+        var len = Math.hypot(B.x - A.x, B.y - A.y, B.z - A.z);
+        g.add(label3D(fmt(len, 3) + " m", ws[0].clone().add(ws[1]).multiplyScalar(0.5), "md-mlab"));
+      }
+      three.scene.add(g);
+      meas.obj = g;
+    }
+    requestRender();
+  }
+  function label3D(text, pos, cls) {
+    var el = document.createElement("div");
+    el.className = cls; el.textContent = text;
+    var lab = new Lib.Label(el);
+    lab.position.copy(pos);
+    return lab;
+  }
+
+  // ---- rez a profil (2D) ------------------------------------------------------
+  // body merania v súradniciach plátna rezu: priečny rez [odsun, výška],
+  // profil [staničenie, výška]; zmenou staničenia či režimu sa meranie zruší
+  function setSecMeasure(on) {
+    st.sec.meas.on = on;
+    st.sec.meas.pts = [];
+    $("secMeasBtn").classList.toggle("is-on", on);
+    $("secWrap").classList.toggle("is-measure", on);
+    if (!on) showSnap($("secSnap"), 0, 0, null);
+    renderSecMeas();
+    drawSection();
+  }
+  function clearSecMeas() {
+    if (!st.sec.meas.pts.length) return;
+    st.sec.meas.pts = [];
+    renderSecMeas();
+  }
+
+  // skutočné súradnice bodu rezu či profilu
+  function secPointInfo(q) {
+    var A = st.sec.al;
+    if (st.sec.mode === "long") {
+      var c = A.a.atStation(q[0]);
+      return pointInfo(c.x, c.y, q[1]);
+    }
+    var F = st.sec.data.frame;
+    var w = F.P.clone().addScaledVector(F.R, q[0]).add(new Lib.T.Vector3(0, q[1] - F.p.z, 0));
+    var p = worldToIfc(A.m, w);
+    return pointInfo(p[0], p[1], p[2]);
+  }
+
+  // prichytenie v reze / profile: vrchol obrysu → stred úsečky → bod na úsečke;
+  // v priečnom reze aj os (niveleta)
+  function secSnap(x, y) {
+    var long = st.sec.mode === "long";
+    var V = long ? st.sec.pview : st.sec.view;
+    var toS = long ? function (u, v) { return [pX(V, u), pY(V, v)]; } : function (u, v) { return toScr(V, u, v); };
+    var fromS = long ? function (X, Y) { return pInv(V, X, Y); } : function (X, Y) { return fromScr(V, X, Y); };
+    var c = { d: SNAP_PX + 1, q: fromS(x, y), type: null, x: x, y: y }, m = null, md = SNAP_PX * 0.8 + 1, e = null, ed = SNAP_PX * 0.8 + 1;
+    var items = long ? (st.sec.prof ? st.sec.prof.items : []) : (st.sec.data ? st.sec.data.items : []);
+    function lines(L, closed) {
+      var n = L.length / 2, S = [];
+      for (var i = 0; i < n; i++) S.push(toS(L[i * 2], L[i * 2 + 1]));
+      for (i = 0; i < n; i++) {
+        var P = S[i], d = Math.hypot(P[0] - x, P[1] - y);
+        if (d < c.d) c = { d: d, q: [L[i * 2], L[i * 2 + 1]], type: "corner", x: P[0], y: P[1] };
+        var j = i + 1;
+        if (j === n) { if (!closed) break; j = 0; }
+        var Q = S[j], ui = i * 2, uj = j * 2;
+        var mxp = (P[0] + Q[0]) / 2, myp = (P[1] + Q[1]) / 2, dm = Math.hypot(mxp - x, myp - y);
+        if (dm < md) { md = dm; m = { q: [(L[ui] + L[uj]) / 2, (L[ui + 1] + L[uj + 1]) / 2], type: "mid", x: mxp, y: myp }; }
+        var sx = Q[0] - P[0], sy = Q[1] - P[1], s2 = sx * sx + sy * sy;
+        var t = s2 ? Math.max(0, Math.min(1, ((x - P[0]) * sx + (y - P[1]) * sy) / s2)) : 0;
+        var de = Math.hypot(P[0] + sx * t - x, P[1] + sy * t - y);
+        if (de < ed) { ed = de; e = { q: [L[ui] + (L[uj] - L[ui]) * t, L[ui + 1] + (L[uj + 1] - L[ui + 1]) * t], type: "edge", x: P[0] + sx * t, y: P[1] + sy * t }; }
+      }
+    }
+    items.forEach(function (it) {
+      it.loops.forEach(function (L) { lines(L, true); });
+      it.open.forEach(function (L) { lines(L, false); });
+    });
+    if (!long && st.sec.data && st.sec.data.frame.p.hasZ) {
+      var ax = toS(0, st.sec.data.frame.p.z), da = Math.hypot(ax[0] - x, ax[1] - y);
+      if (da < c.d) c = { d: da, q: [0, st.sec.data.frame.p.z], type: "axis", x: ax[0], y: ax[1] };
+    }
+    if (!c.type) c = m || e || { q: fromS(x, y), type: null, x: x, y: y };
+    return c;
+  }
+
+  function secMeasClick(x, y) {
+    var M = st.sec.meas, r = secSnap(x, y);
+    if (M.pts.length >= 2) M.pts = [];
+    M.pts.push({ q: r.q, snap: r.type });
+    renderSecMeas();
+    drawSection();
+  }
+
+  function renderSecMeas() {
+    var el = $("secMeas"), M = st.sec.meas;
+    if (!M.on || !M.pts.length || !st.sec.al || (st.sec.mode !== "long" && !st.sec.data)) { el.hidden = true; return; }
+    var pts = M.pts.map(function (p) { var P = secPointInfo(p.q); P.snap = p.snap; P.q = p.q; return P; });
+    el.innerHTML = measHTML(pts, st.sec.mode === "long");
+    el.hidden = false;
+  }
+
+  // kreslenie merania do plátna rezu / profilu (volá drawSection a drawProfile)
+  function drawSecMeas(ctx) {
+    var M = st.sec.meas;
+    if (!M.on || !M.pts.length) return;
+    var long = st.sec.mode === "long", V = long ? st.sec.pview : st.sec.view;
+    if (!V) return;
+    var S = M.pts.map(function (p) { return long ? [pX(V, p.q[0]), pY(V, p.q[1])] : toScr(V, p.q[0], p.q[1]); });
+    ctx.save();
+    ctx.strokeStyle = "#0B7A75"; ctx.fillStyle = "#0B7A75"; ctx.lineWidth = 1.5;
+    if (S.length === 2) {
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(S[0][0], S[0][1]); ctx.lineTo(S[1][0], S[1][1]); ctx.stroke();
+      ctx.setLineDash([]);
+      // pravouhlý trojuholník — vodorovná a zvislá zložka
+      ctx.globalAlpha = 0.45;
+      ctx.beginPath(); ctx.moveTo(S[0][0], S[0][1]); ctx.lineTo(S[1][0], S[0][1]); ctx.lineTo(S[1][0], S[1][1]); ctx.stroke();
+      ctx.globalAlpha = 1;
+      var a = M.pts[0].q, b = M.pts[1].q, txt;
+      if (long) {
+        var ds = b[0] - a[0], dv = b[1] - a[1];
+        txt = fmt(Math.abs(ds), 2) + " m · Δv " + fmt(dv, 3) + (Math.abs(ds) > 1e-6 ? " · " + fmt(dv / ds * 100, 2) + " %" : "");
+      } else txt = fmt(Math.hypot(b[0] - a[0], b[1] - a[1]), 3) + " m";
+      ctx.font = "600 11px 'IBM Plex Mono', monospace"; ctx.textAlign = "center";
+      var mx = (S[0][0] + S[1][0]) / 2, my = (S[0][1] + S[1][1]) / 2 - 8, w = ctx.measureText(txt).width + 10;
+      ctx.fillStyle = "rgba(255,255,255,.92)"; ctx.fillRect(mx - w / 2, my - 12, w, 16);
+      ctx.fillStyle = "#0B7A75"; ctx.fillText(txt, mx, my);
+    }
+    S.forEach(function (s, i) {
+      ctx.beginPath(); ctx.arc(s[0], s[1], 4, 0, Math.PI * 2); ctx.fill();
+      ctx.font = "600 11px 'IBM Plex Mono', monospace"; ctx.textAlign = "left";
+      ctx.fillText("AB"[i], s[0] + 6, s[1] - 6);
+    });
+    ctx.restore();
   }
 
   // =========================================================================
@@ -657,7 +1284,8 @@
             if (out.length >= 4) return;
             if (d1 === 0) { pushPt(i1, 0); return; }
             if ((d1 < 0) === (d2 < 0) || d2 === 0) return;
-            pushPt(i1, d1 / (d1 - d2), i2);
+            if (after(Pa, i1, i2)) pushPt(i2, d2 / (d2 - d1), i1);
+            else pushPt(i1, d1 / (d1 - d2), i2);
           }
           function pushPt(i1, t, i2) {
             var x = Pa[i1], y = Pa[i1 + 1], z = Pa[i1 + 2];
@@ -678,7 +1306,7 @@
           segs = keep;
           if (!segs.length) return;
         }
-        var ch = chain(segs);
+        var ch = chain(segs, !m.isTerrain && prod.cls !== LX_CLS);
         items.push({ m: m, id: prod.id, cls: prod.cls, color: prod.color, segs: segs, loops: ch.loops, open: ch.open });
       });
     });
@@ -713,8 +1341,17 @@
     return { station: stn, frame: F, items: items, bb: bb };
   }
 
-  /* Úsečky rezu → uzavreté obrysy (na výplň) a otvorené čiary. */
-  function chain(segs) {
+  /* Je vrchol i „za“ vrcholom j? Priesečník hrany s rovinou sa počíta vždy od
+     menšieho konca — susedné trojuholníky (web-ifc má vrcholy pre každú plochu
+     zvlášť) tak dajú bitovo rovnaký bod a obrys sa spojí bez medzier. */
+  function after(P, i, j) {
+    return P[i] !== P[j] ? P[i] > P[j] : P[i + 1] !== P[j + 1] ? P[i + 1] > P[j + 1] : P[i + 2] > P[j + 2];
+  }
+
+  /* Úsečky rezu → uzavreté obrysy (na výplň) a otvorené čiary.
+     solid = prvok je teleso — otvorené kúsky sa dopoja a malé medzery uzavrú
+     (closeGaps); pri ploche (terén, povrch z LandXML) ostanú čiarou. */
+  function chain(segs, solid) {
     var Q = 1e4, n = segs.length / 4, adj = new Map(), used = new Uint8Array(n);
     function k(u, v) { return Math.round(u * Q) + "," + Math.round(v * Q); }
     var keys = [];
@@ -758,7 +1395,83 @@
       }
       (closed ? loops : open).push(pts);
     }
-    return { loops: loops, open: open };
+    if (solid && open.length) closeGaps(open, loops);
+    function keep(closed) {
+      return function (L) { L = simplify(L, closed); return L.length >= (closed ? 6 : 4) ? L : null; };
+    }
+    return { loops: loops.map(keep(true)).filter(Boolean), open: open.map(keep(false)).filter(Boolean) };
+  }
+
+  /* Obrys telesa v reze má byť uzavretý — otvorený zostane, keď v geometrii
+     chýba stena (odčítané otvory, chyba exportu) alebo sa prvok skladá z telies,
+     ktoré sa dotýkajú. Kúsky s koncami bližšie než GAP_JOIN sa spoja; obrys,
+     ktorému na uzavretie chýba málo, sa uzavrie priamkou a dostane výplň. */
+  var GAP_JOIN = 0.01;         // m
+  function closeGaps(open, loops) {
+    function d(L, i, M, j) { return Math.hypot(L[i] - M[j], L[i + 1] - M[j + 1]); }
+    function rev(L) { var o = []; for (var i = L.length - 2; i >= 0; i -= 2) o.push(L[i], L[i + 1]); return o; }
+    for (var changed = true; changed;) {
+      changed = false;
+      for (var a = 0; a < open.length && !changed; a++) {
+        var A = open[a], ae = A.length - 2;
+        for (var b = a + 1; b < open.length; b++) {
+          var B = open[b], be = B.length - 2, J = null;
+          if (d(A, ae, B, 0) < GAP_JOIN) J = A.concat(B);
+          else if (d(A, ae, B, be) < GAP_JOIN) J = A.concat(rev(B));
+          else if (d(A, 0, B, be) < GAP_JOIN) J = B.concat(A);
+          else if (d(A, 0, B, 0) < GAP_JOIN) J = rev(B).concat(A);
+          if (J) { open.splice(b, 1); open[a] = J; changed = true; break; }
+        }
+      }
+    }
+    for (var k = open.length - 1; k >= 0; k--) {
+      var L = open[k], n = L.length;
+      if (n < 6) continue;
+      var len = 0;
+      for (var i = 2; i < n; i += 2) len += Math.hypot(L[i] - L[i - 2], L[i + 1] - L[i - 1]);
+      var gap = d(L, 0, L, n - 2);
+      if (gap <= Math.max(0.1, Math.min(0.05 * len, 3))) { loops.push(L); open.splice(k, 1); }
+    }
+  }
+
+  /* Rovná hrana v reze sa skladá z kúskov po trojuholníkoch — body, ktoré od
+     priamky odbočujú menej než SIMPLIFY_TOL (aj drobné spätné hroty), vypadnú.
+     Čiara je potom naozaj rovná a obrys má len svoje skutočné zlomy. */
+  var SIMPLIFY_TOL = 5e-4;     // m
+  function simplify(pts, closed) {
+    var n = pts.length / 2;
+    if (n < 3) return pts;
+    var out = [pts[0], pts[1]];
+    for (var i = 1; i < n; i++) {
+      var x = pts[i * 2], y = pts[i * 2 + 1], k = out.length;
+      if (Math.abs(x - out[k - 2]) < 1e-7 && Math.abs(y - out[k - 1]) < 1e-7) continue;   // rovnaký bod
+      out.push(x, y);
+      // stredný z posledných troch bodov leží na spojnici susedov → netreba ho
+      while (out.length >= 6) {
+        var m = out.length;
+        if (!(offLine(out[m - 6], out[m - 5], out[m - 4], out[m - 3], out[m - 2], out[m - 1]) < SIMPLIFY_TOL)) break;
+        out.splice(m - 4, 2);
+      }
+    }
+    if (closed) {
+      // aj cez miesto, kde sa obrys uzatvára
+      while (out.length >= 8) {
+        var L = out.length;
+        if (offLine(out[L - 2], out[L - 1], out[0], out[1], out[2], out[3]) < SIMPLIFY_TOL) { out.splice(0, 2); continue; }
+        if (offLine(out[L - 4], out[L - 3], out[L - 2], out[L - 1], out[0], out[1]) < SIMPLIFY_TOL) { out.splice(L - 2, 2); continue; }
+        break;
+      }
+    }
+    return out;
+  }
+  // vzdialenosť bodu B od úsečky A–C (pri spätnom hrote od bližšieho konca)
+  function offLine(ax, ay, bx, by, cx, cy) {
+    var dx = cx - ax, dy = cy - ay, l2 = dx * dx + dy * dy;
+    if (l2 < 1e-14) return Math.hypot(bx - ax, by - ay);
+    var t = ((bx - ax) * dx + (by - ay) * dy) / l2;
+    if (t < 0) return Math.hypot(bx - ax, by - ay);
+    if (t > 1) return Math.hypot(bx - cx, by - cy);
+    return Math.abs((bx - ax) * dy - (by - ay) * dx) / Math.sqrt(l2);
   }
 
   function setClip() {
@@ -829,6 +1542,7 @@
     if (!a) return;
     stn = Math.max(a.startStation, Math.min(a.endStation, stn));
     st.sec.station = stn;
+    if (st.sec.mode !== "long") clearSecMeas();      // body patrili inej rovine rezu
     var keepView = opts && opts.keepView;
     if (!keepView) st.sec.view = null;
     $("secSt").value = AL.formatStation(stn);
@@ -853,6 +1567,7 @@
     requestAnimationFrame(sizeSecCanvas);
   }
   function closeSection() {
+    st.sec.meas.pts = []; $("secMeas").hidden = true;
     st.sec.al = null; st.sec.data = null; st.sec.prof = null;
     $("mdSec").hidden = true;
     setClip();
@@ -865,7 +1580,7 @@
   function sizeSecCanvas() {
     var cv = $("secCanvas"); if (!cv) return;
     var r = cv.parentElement.getBoundingClientRect();
-    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var dpr = pixelRatio();
     sec2d.w = Math.max(200, r.width); sec2d.h = Math.max(200, r.height);
     cv.width = Math.round(sec2d.w * dpr); cv.height = Math.round(sec2d.h * dpr);
     cv.style.width = sec2d.w + "px"; cv.style.height = sec2d.h + "px";
@@ -898,6 +1613,8 @@
   function drawSection() {
     var ctx = sec2d.ctx, d = st.sec.data;
     if (!ctx || $("mdSec").hidden) return;
+    // zaoblené spoje — ostrý spoj by na krátkych úsečkách robil hroty
+    ctx.lineJoin = "round"; ctx.lineCap = "round";
     if (st.sec.mode === "long") { drawProfile(); return; }
     ctx.clearRect(0, 0, sec2d.w, sec2d.h);
     ctx.fillStyle = "#FCFCFA"; ctx.fillRect(0, 0, sec2d.w, sec2d.h);
@@ -975,6 +1692,7 @@
       ctx.textAlign = "center"; ctx.fillStyle = "#5C5A52"; ctx.font = "12px 'IBM Plex Sans', sans-serif";
       ctx.fillText("V tomto staničení rez nepretína žiadny zobrazený prvok.", sec2d.w / 2, sec2d.h / 2 - 20);
     }
+    drawSecMeas(ctx);
   }
 
   function secHit(x, y) {
@@ -1020,6 +1738,10 @@
       cv.setPointerCapture(e.pointerId);
     });
     cv.addEventListener("pointermove", function (e) {
+      if (st.sec.meas.on && !drag) {
+        var rr = cv.getBoundingClientRect(), sn = secSnap(e.clientX - rr.left, e.clientY - rr.top);
+        showSnap($("secSnap"), sn.x, sn.y, sn.type);
+      } else showSnap($("secSnap"), 0, 0, null);
       if (st.sec.mode === "long") { profMove(e, drag); return; }
       var r = cv.getBoundingClientRect(), V = st.sec.view;
       if (V) {
@@ -1036,14 +1758,15 @@
     });
     cv.addEventListener("pointerup", function (e) {
       var r = cv.getBoundingClientRect();
-      if (drag && !drag.moved && st.sec.mode === "long") profClick(e.clientX - r.left, e.clientY - r.top);
+      if (drag && !drag.moved && st.sec.meas.on) secMeasClick(e.clientX - r.left, e.clientY - r.top);
+      else if (drag && !drag.moved && st.sec.mode === "long") profClick(e.clientX - r.left, e.clientY - r.top);
       else if (drag && !drag.moved) {
         var it = secHit(e.clientX - r.left, e.clientY - r.top);
         if (it) select(it.m, it.id); else select(null);
       }
       drag = null;
     });
-    cv.addEventListener("pointerleave", function () { $("secCursor").textContent = ""; });
+    cv.addEventListener("pointerleave", function () { $("secCursor").textContent = ""; showSnap($("secSnap"), 0, 0, null); });
     cv.addEventListener("dblclick", function () {
       if (st.sec.mode === "long") st.sec.pview = null; else st.sec.view = null;
       drawSection();
@@ -1067,6 +1790,8 @@
       ["smerový prvok", (H[p.hType] || p.hType.toLowerCase()) + (p.radius ? " · R " + fmt(Math.abs(p.radius), 1) + (p.radius > 0 ? " (vľavo)" : " (vpravo)") : "")],
       ["výškový prvok", p.hasZ ? (Vt[p.vType] || p.vType.toLowerCase()) + (p.vRadius && p.vType !== "CONSTANTGRADIENT" ? " · R " + fmt(Math.abs(p.vRadius), 0) : "") : "—"]
     ];
+    var vn = speedAt(a, p.station);
+    if (vn != null) rows.push(["návrhová rýchlosť", fmt(vn, 0) + " " + a.speedUnit]);
     if (p.cant) rows.push(["prevýšenie Ľ / P", fmt(p.cant.left * 1000, 1) + " / " + fmt(p.cant.right * 1000, 1) + " mm"]);
     if (st.sec.mode === "long") rows.push(["prvky v profile", String(st.sec.prof ? st.sec.prof.items.length : 0)]);
     else rows.push(["prvky v reze", String(d.items.length)]);
@@ -1083,6 +1808,7 @@
   /* Prepnutie medzi priečnym rezom a pozdĺžnym profilom. */
   function setMode(mode) {
     st.sec.mode = mode;
+    clearSecMeas();
     var long = mode === "long";
     $("secModeX").classList.toggle("is-on", !long);
     $("secModeL").classList.toggle("is-on", long);
@@ -1090,15 +1816,20 @@
     $("secExagL").hidden = !long;
     $("secSerBox").hidden = long;
     $("secFit").textContent = long ? "celý profil" : "celý rez";
-    $("secCursor").style.bottom = long ? (BAND + 24) + "px" : "";
+    $("mdSec").classList.toggle("is-long", long);      // profil s tabuľkou potrebuje viac výšky
+    $("secCursor").style.bottom = long ? (updateBand() + 24) + "px" : "";
     $("secSvg").textContent = long ? "profil do DXF ↓" : "rez do DXF ↓";
     document.querySelector("#mdSec .sec__tag").textContent = long ? "profil" : "rez";
     if (long && !st.sec.prof && st.sec.al) {
       busySec(true);
-      setTimeout(function () { st.sec.prof = computeProfile(); busySec(false); drawSection(); renderSecInfo(); }, 20);
+      setTimeout(function () {
+        st.sec.prof = computeProfile(); busySec(false);
+        $("secCursor").style.bottom = (updateBand() + 24) + "px";
+        sizeSecCanvas(); renderSecInfo();
+      }, 20);
       return;
     }
-    drawSection();
+    sizeSecCanvas();      // panel mení výšku — plátno sa prispôsobí a prekreslí
     renderSecInfo();
   }
   function busySec(on) {
@@ -1183,7 +1914,7 @@
           if (segs[i] < bb[0]) bb[0] = segs[i]; if (segs[i] > bb[2]) bb[2] = segs[i];
           if (segs[i + 1] < bb[1]) bb[1] = segs[i + 1]; if (segs[i + 1] > bb[3]) bb[3] = segs[i + 1];
         }
-        var ch = chain(segs);
+        var ch = chain(segs, !m.isTerrain && prod.cls !== LX_CLS);
         // prvok, ktorý pokračuje za začiatok či koniec trasy, je na hranici profilu
         // odrezaný — obrys s oboma koncami na tejto hranici sa uzavrie zvislou čiarou
         var edgeA = a.startStation - 0.5, edgeB = a.endStation + 0.5;
@@ -1242,6 +1973,7 @@
         if (q.length >= 6) return;
         if (d1 === 0) { q.push(P[i1], P[i1 + 1], P[i1 + 2]); return; }
         if ((d1 < 0) === (d2 < 0) || d2 === 0) return;
+        if (after(P, i1, i2)) { var sw = i1; i1 = i2; i2 = sw; sw = d1; d1 = d2; d2 = sw; }
         var t = d1 / (d1 - d2);
         q.push(P[i1] + (P[i2] - P[i1]) * t, P[i1 + 1] + (P[i2 + 1] - P[i1 + 1]) * t, P[i1 + 2] + (P[i2 + 2] - P[i1 + 2]) * t);
       }
@@ -1249,20 +1981,99 @@
   }
 
   // ---- kreslenie profilu ----------------------------------------------------
-  var BAND = 34;   // výška pásu smerových pomerov pod profilom (px)
+  /* Tabuľka pod pozdĺžnym profilom ako vo výkrese (STN/ČSN, šablóny Civil 3D):
+     výšky nivelety a terénu v staniciach priečnych rezov, staničenie s číslom
+     rezu, vzdialenosti medzi rezmi, smerové pomery, prípadne prevýšenie.
+     Riadky bez údajov (terén, prevýšenie) sa vynechajú. */
+  function profRows() {
+    var pr = st.sec.prof, rows = [];
+    if (!pr) return [{ key: "smer", h: 34, label: "smerové pomery" }];
+    if (pr.a.hasVertical) rows.push({ key: "niv", h: 50, label: "niveleta" });
+    if (profSurface(pr)) rows.push({ key: "ter", h: 50, label: "terén" });
+    rows.push({ key: "km", h: 70, label: "staničenie" }, { key: "dist", h: 18, label: "vzdialenosti" },
+              { key: "smer", h: 46, label: "smerové pomery" });
+    if (pr.a.hasCant) rows.push({ key: "cant", h: 50, label: "prevýšenie ľ/p (mm)" });
+    return rows;
+  }
+  // výška tabuľky sa prepočíta pri kreslení (pY ju potrebuje pri každom bode)
+  var bandCache = 34;
+  function bandH() { return bandCache; }
+  function updateBand() { bandCache = profRows().reduce(function (s, r) { return s + r.h; }, 0); return bandCache; }
+
+  /* Povrch pre riadok „terén“ — povrch z LandXML (prednostne pôvodný terén
+     podľa názvu), inak terén z mapových podkladov. */
+  function profSurface(pr) {
+    if (pr.surface !== undefined) return pr.surface;
+    var cand = pr.items.filter(function (it) { return it.m.isTerrain || it.cls === LX_CLS; });
+    var named = cand.filter(function (it) {
+      var p = it.m.products && it.m.products.get(it.id);
+      return p && /^(EG|OG)\b|ter[eé]n|existing|p[oô]vodn/i.test(p.name || "");
+    });
+    pr.surface = named[0] || cand.filter(function (it) { return it.cls === LX_CLS; })[0] || cand[0] || null;
+    return pr.surface;
+  }
+  // výška povrchu v staničení — najvyšší prienik zvislice s čiarami povrchu
+  function surfaceAt(it, x) {
+    var best = null;
+    it.open.concat(it.loops).forEach(function (L) {
+      for (var i = 0; i + 3 < L.length; i += 2) {
+        var x1 = L[i], x2 = L[i + 2];
+        if ((x < x1 && x < x2) || (x > x1 && x > x2) || x1 === x2) continue;
+        var z = L[i + 1] + (L[i + 3] - L[i + 1]) * (x - x1) / (x2 - x1);
+        if (best == null || z > best) best = z;
+      }
+    });
+    return best;
+  }
+
+  /* Lomy nivelety z výškových prvkov: PVI (priesečník dotyčníc), polomer R,
+     dĺžka dotyčnice T a vzopätie y = T² / 2R; medzi lomami sklon a dĺžka. */
+  function niveletaPvis(a) {
+    if (a._pvi) return a._pvi;
+    var v = a.vertical, out = [];
+    if (!v.length) return (a._pvi = out);
+    var z = function (d) { return a.pointAt(d).z; };
+    out.push({ d: v[0].start, z: z(v[0].start), T: 0 });
+    v.forEach(function (sg, i) {
+      if (sg.type === "CONSTANTGRADIENT") {
+        // lom bez oblúka — dva priame úseky za sebou s iným sklonom
+        var nx = v[i + 1];
+        if (nx && nx.type === "CONSTANTGRADIENT" && Math.abs(nx.g0 - sg.g0) > 1e-9) out.push({ d: nx.start, z: z(nx.start), T: 0 });
+        return;
+      }
+      var s0 = sg.start, s1 = sg.start + sg.length, z0 = z(s0), z1 = z(s1), dg = sg.g1 - sg.g0;
+      if (Math.abs(dg) < 1e-9) return;
+      var d = (z1 - z0 + sg.g0 * s0 - sg.g1 * s1) / (sg.g0 - sg.g1);
+      var R = sg.type === "CIRCULARARC" && sg.r ? Math.abs(sg.r) : sg.length / Math.abs(dg);
+      var T = sg.type === "CIRCULARARC" && sg.r ? R * Math.abs(dg) / 2 : sg.length / 2;
+      out.push({ d: d, z: z0 + sg.g0 * (d - s0), R: R, T: T, y: T * T / (2 * R), s0: s0, s1: s1, crest: dg < 0 });
+    });
+    var last = v[v.length - 1], de = last.start + last.length;
+    out.push({ d: de, z: z(de), T: 0 });
+    return (a._pvi = out);
+  }
+
+  // staničenia priečnych rezov v profile — po kroku rezu, vrátane začiatku a konca
+  function profStations(a) {
+    var step = st.sec.step || 20, out = [a.startStation];
+    for (var x = Math.floor(a.startStation / step + 1 + 1e-9) * step; x < a.endStation - 1e-6; x += step) out.push(x);
+    out.push(a.endStation);
+    return out;
+  }
+
   function profFit(pr) {
     var a = pr.a, bb = pr.bb, ex = st.sec.exag;
     var x0 = a.startStation, x1 = a.endStation;
     var y0 = isFinite(bb[1]) ? bb[1] : 0, y1 = isFinite(bb[3]) ? bb[3] : 10;
     if (y1 - y0 < 1) { y0 -= 1; y1 += 1; }
-    var H = sec2d.h - BAND - 46;
+    var H = sec2d.h - updateBand() - 46;
     var sx = Math.min((sec2d.w - 80) / Math.max(x1 - x0, 1), H / ((y1 - y0) * ex));
     return { sx: sx, cs: (x0 + x1) / 2, cv: (y0 + y1) / 2 };
   }
   function pX(V, x) { return 50 + (sec2d.w - 60) / 2 + (x - V.cs) * V.sx; }
-  function pY(V, y) { return 16 + (sec2d.h - BAND - 16) / 2 - (y - V.cv) * V.sx * st.sec.exag; }
+  function pY(V, y) { return 16 + (sec2d.h - bandH() - 16) / 2 - (y - V.cv) * V.sx * st.sec.exag; }
   function pInv(V, X, Y) {
-    return [(X - 50 - (sec2d.w - 60) / 2) / V.sx + V.cs, -(Y - 16 - (sec2d.h - BAND - 16) / 2) / (V.sx * st.sec.exag) + V.cv];
+    return [(X - 50 - (sec2d.w - 60) / 2) / V.sx + V.cs, -(Y - 16 - (sec2d.h - bandH() - 16) / 2) / (V.sx * st.sec.exag) + V.cv];
   }
   function stLabel(x, step) {
     return AL.formatStation(x, step < 1 ? 1 : 0).replace(/\.0$/, "");
@@ -1273,8 +2084,9 @@
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = "#FCFCFA"; ctx.fillRect(0, 0, W, H);
     if (!pr) return;
+    updateBand();
     var V = st.sec.pview || (st.sec.pview = profFit(pr)), ex = st.sec.exag;
-    var plotB = H - BAND;
+    var plotB = H - bandH();
 
     // mriežka: staničenia a výšky
     var xs = niceStep(90 / V.sx), ys = niceStep(46 / (V.sx * ex));
@@ -1330,26 +2142,63 @@
       sec2d.paths.push({ it: it, path: path });
     });
 
-    // niveleta, lomy sklonu a popisy prvkov
+    // stopy priečnych rezov — zvislice od nivelety (terénu) po tabuľku
+    var stations = profStations(a), surf = profSurface(pr);
+    ctx.strokeStyle = "rgba(176,74,160,.45)"; ctx.lineWidth = 1;
+    stations.forEach(function (x) {
+      var X = Math.round(pX(V, x)) + 0.5;
+      if (X < 0 || X > W) return;
+      var tops = [];
+      if (a.hasVertical) tops.push(a.atStation(x).z);
+      var tz = surf ? surfaceAt(surf, x) : null; if (tz != null) tops.push(tz);
+      var top = tops.length ? Math.min(pY(V, Math.max.apply(null, tops)), plotB) : 0;
+      ctx.beginPath(); ctx.moveTo(X, top); ctx.lineTo(X, plotB); ctx.stroke();
+    });
+
+    // niveleta, lomy (PVI) s oblúkmi a sklony
     if (pr.nivel.length) {
       ctx.strokeStyle = "#D0216A"; ctx.lineWidth = 1.6; ctx.beginPath();
       pr.nivel.forEach(function (n, i) { var px = pX(V, n[0]), py = pY(V, n[1]); if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); });
       ctx.stroke();
       ctx.lineWidth = 1;
-      a.vertical.forEach(function (sg, i) {
-        var s0 = a.startStation + sg.start, s1 = s0 + sg.length;
-        var z0 = a.pointAt(sg.start).z, x0 = pX(V, s0), x1 = pX(V, s1);
-        // hranica prvku
-        ctx.fillStyle = "#D0216A";
-        ctx.beginPath(); ctx.arc(x0, pY(V, z0), 2.5, 0, Math.PI * 2); ctx.fill();
-        if (i === a.vertical.length - 1) { ctx.beginPath(); ctx.arc(x1, pY(V, a.pointAt(sg.start + sg.length).z), 2.5, 0, Math.PI * 2); ctx.fill(); }
-        if (x1 - x0 < 70 || x1 < 0 || x0 > W) return;
-        var mid = sg.start + sg.length / 2, zm = a.pointAt(mid).z;
-        var label = sg.type === "CONSTANTGRADIENT" ? fmt(sg.g0 * 100, 2) + " %" :
-          "R " + fmt(Math.abs(sg.r || 0), 0) + (sg.type === "PARABOLICARC" ? " (par.)" : "");
-        ctx.font = "600 10px 'IBM Plex Mono', monospace"; ctx.textAlign = "center";
-        ctx.fillStyle = sg.type === "CONSTANTGRADIENT" ? "#A01B55" : "#4B3F8F";
-        ctx.fillText(label, pX(V, a.startStation + mid), pY(V, zm) - 8);
+      var pv = niveletaPvis(a), s0 = a.startStation;
+      ctx.font = "10px 'IBM Plex Mono', monospace";
+      pv.forEach(function (P, i) {
+        var X = pX(V, s0 + P.d), Y = pY(V, P.z);
+        if (P.R) {
+          // dotyčnice k oblúku až po lom
+          ctx.strokeStyle = "rgba(208,33,106,.6)"; ctx.setLineDash([4, 3]);
+          ctx.beginPath(); ctx.moveTo(pX(V, s0 + P.s0), pY(V, a.pointAt(P.s0).z)); ctx.lineTo(X, Y);
+          ctx.lineTo(pX(V, s0 + P.s1), pY(V, a.pointAt(P.s1).z)); ctx.stroke(); ctx.setLineDash([]);
+        }
+        if (X < -60 || X > W + 60) return;
+        ctx.strokeStyle = "#D0216A"; ctx.fillStyle = "#FCFCFA";
+        ctx.beginPath(); ctx.arc(X, Y, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        // zvislica nad lomom s popisom oblúka a staničením lomu
+        var up = Math.max(14, Y - 70);
+        ctx.beginPath(); ctx.moveTo(X + 0.5, Y - 4); ctx.lineTo(X + 0.5, up); ctx.stroke();
+        ctx.fillStyle = "#A01B55"; ctx.textAlign = "left";
+        if (P.R) {
+          ctx.font = "600 10px 'IBM Plex Mono', monospace";
+          ctx.fillText("R = " + fmt(P.R, 2), X + 4, up + 8);
+          ctx.font = "10px 'IBM Plex Mono', monospace";
+          ctx.fillText("T = " + fmt(P.T, 3), X + 4, up + 20);
+          ctx.fillText("y = " + fmt(P.y, 3), X + 4, up + 32);
+        }
+        ctx.save(); ctx.translate(X - 3, Y - 8); ctx.rotate(-Math.PI / 2);
+        ctx.textAlign = "left"; ctx.font = "9.5px 'IBM Plex Mono', monospace";
+        ctx.fillText(AL.formatStation(s0 + P.d, 2) + " · " + fmt(P.z, 3), 0, 0);
+        ctx.restore();
+        // sklon a dĺžka medzi lomami, v zátvorke priama časť medzi oblúkmi
+        var N = pv[i + 1]; if (!N) return;
+        var X2 = pX(V, s0 + N.d), Y2 = pY(V, N.z);
+        if (X2 - X < 90 || X2 < 0 || X > W) return;
+        var g = (N.z - P.z) / (N.d - P.d), dl = N.d - P.d, tan = dl - P.T - N.T;
+        var txt = (g >= 0 ? "+" : "") + fmt(g * 100, 3) + " % dl. " + fmt(dl, 2) + (P.T || N.T ? " (" + fmt(tan, 2) + ")" : "");
+        ctx.save(); ctx.translate((X + X2) / 2, (Y + Y2) / 2); ctx.rotate(Math.atan2(Y2 - Y, X2 - X));
+        ctx.font = "600 10px 'IBM Plex Mono', monospace"; ctx.textAlign = "center"; ctx.fillStyle = "#A01B55";
+        if (ctx.measureText(txt).width < X2 - X - 20) ctx.fillText(txt, 0, -6);
+        ctx.restore();
       });
     } else {
       ctx.fillStyle = "#8A5A00"; ctx.font = "11px 'IBM Plex Sans', sans-serif"; ctx.textAlign = "left";
@@ -1365,24 +2214,117 @@
     ctx.fillStyle = "#4B3F8F"; ctx.fillRect(cx - tw / 2, 2, tw, 15);
     ctx.fillStyle = "#fff"; ctx.fillText(tag, cx, 13);
 
-    // pás smerových pomerov — krivosť (doľava hore, doprava dole)
-    ctx.fillStyle = "#fff"; ctx.fillRect(0, plotB, W, BAND);
-    ctx.strokeStyle = "#D3CFC4"; ctx.beginPath(); ctx.moveTo(0, plotB + 0.5); ctx.lineTo(W, plotB + 0.5); ctx.stroke();
-    var mid0 = plotB + BAND / 2, kmax = 0;
+    profTable(ctx, pr, V, plotB, stations, surf);
+    drawSecMeas(ctx);
+  }
+
+  /* Tabuľka pod profilom. Hodnoty v staniciach rezov sú otočené o 90°; keď sú
+     stanice na obrazovke príliš husto, popisuje sa len každá n-tá. */
+  function profTable(ctx, pr, V, plotB, stations, surf) {
+    var W = sec2d.w, a = pr.a, rows = profRows(), y = plotB;
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, plotB, W, sec2d.h - plotB);
+    var vis = stations.filter(function (x) { var X = pX(V, x); return X > -20 && X < W + 20; });
+    var gap = vis.length > 1 ? (pX(V, vis[vis.length - 1]) - pX(V, vis[0])) / (vis.length - 1) : 99;
+    var every = Math.max(1, Math.ceil(13 / Math.max(gap, 1e-6)));
+    var numOf = new Map(stations.map(function (x, i) { return [x, i + 1]; }));
+    var shown = vis.filter(function (x) { var n = numOf.get(x); return n === 1 || n === stations.length || (n - 1) % every === 0; });
+
+    function rot(txt, X, yb, color, bold) {
+      ctx.save(); ctx.translate(X + 3.5, yb - 4); ctx.rotate(-Math.PI / 2);
+      ctx.fillStyle = color; ctx.font = (bold ? "600 " : "") + "9.5px 'IBM Plex Mono', monospace"; ctx.textAlign = "left";
+      ctx.fillText(txt, 0, 0); ctx.restore();
+    }
+    function ticks(y0, h) {
+      ctx.strokeStyle = "#ECEAE3";
+      shown.forEach(function (x) { var X = Math.round(pX(V, x)) + 0.5; ctx.beginPath(); ctx.moveTo(X, y0); ctx.lineTo(X, y0 + h); ctx.stroke(); });
+    }
+
+    rows.forEach(function (r) {
+      ctx.strokeStyle = "#D3CFC4"; ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(W, y + 0.5); ctx.stroke();
+      if (r.key === "niv") {
+        ticks(y, r.h);
+        shown.forEach(function (x) { rot(fmt(a.atStation(x).z, 3), pX(V, x), y + r.h, "#A01B55", true); });
+      } else if (r.key === "ter") {
+        ticks(y, r.h);
+        shown.forEach(function (x) { var z = surfaceAt(surf, x); if (z != null) rot(fmt(z, 3), pX(V, x), y + r.h, "#2E6B3A"); });
+      } else if (r.key === "km") {
+        ticks(y + 18, r.h - 18);
+        shown.forEach(function (x) {
+          var X = pX(V, x);
+          ctx.strokeStyle = "#B04AA0"; ctx.fillStyle = "#fff";
+          ctx.beginPath(); ctx.arc(X, y + 9, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+          ctx.fillStyle = "#B04AA0"; ctx.font = "600 8.5px 'IBM Plex Mono', monospace"; ctx.textAlign = "center";
+          ctx.fillText(String(numOf.get(x)), X, y + 12);
+          rot(AL.formatStation(x, 2), X, y + r.h, "#2A2925");
+        });
+      } else if (r.key === "dist") {
+        ctx.font = "9.5px 'IBM Plex Mono', monospace"; ctx.textAlign = "center"; ctx.fillStyle = "#5C5A52";
+        for (var i = 0; i + 1 < stations.length; i++) {
+          var X1 = pX(V, stations[i]), X2 = pX(V, stations[i + 1]);
+          if (X2 < 0 || X1 > W) continue;
+          ctx.strokeStyle = "#ECEAE3"; ctx.beginPath(); ctx.moveTo(Math.round(X1) + 0.5, y); ctx.lineTo(Math.round(X1) + 0.5, y + r.h); ctx.stroke();
+          if (X2 - X1 > 34) ctx.fillText(fmt(stations[i + 1] - stations[i], 2), (X1 + X2) / 2, y + 13);
+        }
+      } else if (r.key === "smer") {
+        smerRow(ctx, pr, V, y, r.h);
+      } else if (r.key === "cant") {
+        ticks(y, r.h);
+        shown.forEach(function (x) {
+          var c = a.atStation(x).cant;
+          if (c) rot(fmt(c.left * 1000, 0) + " / " + fmt(c.right * 1000, 0), pX(V, x), y + r.h, "#4B3F8F");
+        });
+      }
+      // názov riadku
+      ctx.font = "9px 'IBM Plex Mono', monospace"; ctx.textAlign = "left";
+      var lw = ctx.measureText(r.label).width + 8;
+      ctx.fillStyle = "rgba(255,255,255,.9)"; ctx.fillRect(0, y + 1, lw, 12);
+      ctx.fillStyle = "#98958A"; ctx.fillText(r.label, 4, y + 10);
+      y += r.h;
+    });
+    ctx.textAlign = "right"; ctx.fillStyle = "#98958A"; ctx.font = "9px 'IBM Plex Mono', monospace";
+    ctx.fillText("prevýšenie " + st.sec.exag + "× · ▲ vľavo  ▼ vpravo", W - 8, plotB - 4);
+  }
+
+  /* Smerové pomery: diagram krivosti a popis každého prvku — priama s dĺžkou,
+     oblúk s polomerom, prechodnica s parametrom A a dĺžkou; hranice prvkov
+     so staničením. */
+  function smerRow(ctx, pr, V, y, h) {
+    var W = sec2d.w, a = pr.a, mid = y + h / 2 + 4, kmax = 0;
     pr.curv.forEach(function (c) { kmax = Math.max(kmax, Math.abs(c[1])); });
-    ctx.strokeStyle = "#ECEAE3"; ctx.beginPath(); ctx.moveTo(0, mid0 + 0.5); ctx.lineTo(W, mid0 + 0.5); ctx.stroke();
+    ctx.strokeStyle = "#ECEAE3"; ctx.beginPath(); ctx.moveTo(0, mid + 0.5); ctx.lineTo(W, mid + 0.5); ctx.stroke();
     if (kmax > 0) {
       ctx.strokeStyle = "#4B3F8F"; ctx.lineWidth = 1.3; ctx.beginPath();
       pr.curv.forEach(function (c, i) {
-        var px = pX(V, c[0]), py = mid0 - c[1] / kmax * (BAND / 2 - 5);
+        var px = pX(V, c[0]), py = mid - c[1] / kmax * (h / 2 - 12);
         if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
       });
       ctx.stroke(); ctx.lineWidth = 1;
     }
-    ctx.fillStyle = "#98958A"; ctx.font = "9.5px 'IBM Plex Mono', monospace"; ctx.textAlign = "left";
-    ctx.fillText("smerové pomery · ▲ vľavo  ▼ vpravo", 6, plotB + 11);
-    ctx.textAlign = "right";
-    ctx.fillText("prevýšenie " + ex + "×", W - 8, plotB + 11);
+    var NAME = { LINE: "priama", CIRCULARARC: "oblúk" };
+    a.horizontal.forEach(function (e) {
+      var s0 = a.startStation + e.start, X1 = pX(V, s0), X2 = pX(V, s0 + e.length);
+      if (X2 < 0 || X1 > W) return;
+      ctx.strokeStyle = "#B8B3A6"; ctx.beginPath(); ctx.moveTo(Math.round(X1) + 0.5, y); ctx.lineTo(Math.round(X1) + 0.5, y + h); ctx.stroke();
+      var R = Math.abs(e.r0 || e.r1 || 0), txt;
+      if (e.type === "LINE") txt = "priama dl. " + fmt(e.length, 2);
+      else if (e.type === "CIRCULARARC") txt = "R = " + fmt(Math.abs(e.r0), 2) + " dl. " + fmt(e.length, 2);
+      else {
+        // prechodnica — parameter A = √(R·L) k väčšiemu polomeru
+        var Rp = Math.max(Math.abs(e.r0 || 0), Math.abs(e.r1 || 0));
+        txt = (Rp ? "A = " + fmt(Math.sqrt(Rp * e.length), 2) + " " : "") + "L = " + fmt(e.length, 2);
+      }
+      ctx.font = "9.5px 'IBM Plex Mono', monospace"; ctx.textAlign = "center"; ctx.fillStyle = "#4B3F8F";
+      var tw = ctx.measureText(txt).width;
+      // stred prvku, no pri prvku presahujúcom okraj plátna v jeho viditeľnej časti
+      var cx = Math.max(Math.max(X1, 0) + tw / 2 + 3, Math.min((X1 + X2) / 2, Math.min(X2, W) - tw / 2 - 3));
+      if (tw < X2 - X1 - 6) ctx.fillText(txt, cx, y + 11);
+      // staničenie hranice prvku (otočené), ak je miesto
+      if (X2 - X1 > 12 && X1 > 0) {
+        ctx.save(); ctx.translate(X1 - 2, y + h - 3); ctx.rotate(-Math.PI / 2);
+        ctx.font = "8.5px 'IBM Plex Mono', monospace"; ctx.textAlign = "left"; ctx.fillStyle = "#7A7568";
+        ctx.fillText(AL.formatStation(s0, 2), 0, 0); ctx.restore();
+      }
+    });
   }
 
   function profHit(x, y) {
@@ -1395,7 +2337,7 @@
   }
   function profClick(x, y) {
     var V = st.sec.pview; if (!V || !st.sec.prof) return;
-    if (y < sec2d.h - BAND) {
+    if (y < sec2d.h - bandH()) {
       var it = profHit(x, y);
       if (it) select(it.m, it.id);
     }
@@ -1753,6 +2695,15 @@
       st.geo.note = "IfcMapConversion v " + m.name + " používa systém „" + (mc.crs || "neuvedený") + "“, ktorý nástroj nepozná — zadajte polohu ručne.";
     }
     if (!st.models.length) return;
+    // LandXML nesie súradnicový systém priamo — jeho súradnice sú mapové
+    for (var j = 0; j < st.models.length; j++) {
+      var lc = st.models[j].lx && st.models[j].lxCode;
+      if (lc && G.supported(lc)) {
+        st.geo.georef = G.makeGeoref({ crs: lc, source: "direct" });
+        st.geo.note = "súradnicový systém z " + st.models[j].name;
+        return;
+      }
+    }
     var b = projectBox();
     if (b && G.looksLikeJtsk(b[0], b[1], b[2], b[3])) {
       st.geo.georef = G.makeGeoref({ crs: "EPSG:5514", source: "direct" });
@@ -2032,18 +2983,26 @@
     $("mdGeoBtn").classList.toggle("is-on", !!(g.mesh && g.mesh.visible));
   }
 
+  // LandXML sa po zmene polohy preloží — scéna a zoznamy sa musia obnoviť
+  function relocated() {
+    if (!syncLandXml()) return;
+    clearMeas3D();
+    applyMaterials(); rebuildIndices(); renderLeft(); renderAlSelect(); renderChips();
+  }
+
   function wireGeo() {
     var body = $("mdGeoBody");
     body.addEventListener("click", function (e) {
       var id = e.target.id;
       if (id === "mgGo") buildTerrain();
       else if (id === "mgDel") { removeTerrain(); setGeoStatus("", ""); renderGeo(); }
-      else if (id === "mgAuto") { st.geo.manual = false; detectGeoref(); renderGeo(); }
+      else if (id === "mgAuto") { st.geo.manual = false; detectGeoref(); relocated(); renderGeo(); }
       else if (id === "mgApply") {
         var r = (+$("mgR").value || 0) * Math.PI / 180;
         st.geo.georef = G.makeGeoref({ crs: $("mgCrs").value, e0: +$("mgE").value, n0: +$("mgN").value, h0: +$("mgH").value,
           ax: Math.cos(r), ay: Math.sin(r), source: "manual" });
         st.geo.manual = true;
+        relocated();
         setGeoStatus("Poloha nastavená — načítajte terén.");
         renderGeo();
       }
@@ -2075,14 +3034,16 @@
   var UPLOAD_ICON = '<svg class="drop__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4m0 0L7 9m5-5l5 5"/><path d="M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2"/></svg>';
 
   function renderDrop(err) {
+    $("mdHead").hidden = false;      // úvodný popis nástroja
     $("mdPanel").hidden = false;
     $("mdPanel").classList.toggle("is-error", !!err);
     $("mdTitle").textContent = err ? "súbor sa nepodarilo načítať" : "nahrajte jeden alebo viac IFC";
     $("mdBody").innerHTML =
       (err ? '<div class="note note--bad" style="margin-bottom:12px"><span class="note__i">✕</span><span>' + esc(err) + "</span></div>" : "") +
       '<div class="drop drop--tall" id="mdDrop">' + UPLOAD_ICON +
-        '<div class="drop__main">presuňte sem .ifc — aj viac naraz</div>' +
-        '<div class="drop__hint">alebo kliknite pre výber · modely sa zobrazia spolu na koordináciu</div>' +
+        '<div class="drop__main">presuňte sem .ifc alebo LandXML — aj viac naraz</div>' +
+        '<div class="drop__hint">alebo kliknite pre výber · modely sa zobrazia spolu na koordináciu · ' +
+          'z LandXML sa načítajú trasy a povrchy TIN</div>' +
       "</div>";
     var dz = $("mdDrop");
     dz.addEventListener("click", function () { $("fileM").click(); });
@@ -2105,8 +3066,8 @@
   }
 
   function addFiles(list) {
-    var files = Array.prototype.slice.call(list).filter(function (f) { return /\.ifc$/i.test(f.name); });
-    if (!files.length) { if (!st.models.length) renderDrop("Vyberte súbory s príponou .ifc."); return; }
+    var files = Array.prototype.slice.call(list).filter(function (f) { return /\.ifc$/i.test(f.name) || isLandXml(f); });
+    if (!files.length) { if (!st.models.length) renderDrop("Vyberte súbory .ifc alebo LandXML (.xml)."); return; }
     if (st.busy) return;
     st.busy = true;
     var first = !st.models.length;
@@ -2115,6 +3076,7 @@
         '<div class="drop__main">načítava sa prehliadač…</div><div class="drop__hint">three.js + web-ifc (WebAssembly), prvýkrát niekoľko sekúnd</div></div>';
     }
     loadLibs().then(function () {
+      $("mdHead").hidden = true;     // po načítaní je popis zbytočný, scéna dostane viac miesta
       $("mdPanel").hidden = true;
       $("mdApp").hidden = false;
       initScene();
@@ -2141,10 +3103,12 @@
         }
         $("mdErr").hidden = !errs.length;
         $("mdErr").innerHTML = errs.length ? '<span class="note__i">✕</span><span>' + esc(errs.join(" · ")) + "</span>" : "";
+        // georeferencovanie pred umiestnením kamery — LandXML sa podľa neho môže preložiť
+        detectGeoref();
+        syncLandXml();
         rebuildIndices();
         applyMaterials();
         if (first) focusBox(visibleBox(), new Lib.T.Vector3(1, 0.8, 1));
-        detectGeoref();
         renderGeo();
         renderAll();
         // prvá trasa → hneď pripraviť rezy
@@ -2166,17 +3130,19 @@
     var i = st.models.indexOf(m); if (i < 0) return;
     if (st.sel && st.sel.m === m) select(null);
     if (st.sec.al && st.sec.al.m === m) closeSection();
+    clearMeas3D();
     three.scene.remove(m.group);
     m.group.traverse(function (o) {
       if (o.geometry) o.geometry.dispose();
       if (o.material) o.material.dispose();
       if (o.element && o.element.parentNode) o.element.parentNode.removeChild(o.element);
     });
-    try { api.CloseModel(m.modelID); } catch (e) { /* už zatvorený */ }
+    if (m.modelID != null) try { api.CloseModel(m.modelID); } catch (e) { /* už zatvorený */ }
     st.models.splice(i, 1);
     Array.from(st.hidden).forEach(function (k) { if (k.indexOf(m.uid + ":") === 0) st.hidden.delete(k); });
     if (!st.models.length) { window.ModelTool.reset(); return; }
     detectGeoref();
+    if (syncLandXml()) applyMaterials();
     renderGeo();
     rebuildIndices();
     renderAll();
@@ -2197,6 +3163,7 @@
     var nEl = 0, nAl = 0, schemas = {};
     st.models.forEach(function (m) { nEl += m.products.size; nAl += m.alignments.length; schemas[m.schema] = 1; });
     var maps = st.models.filter(function (m) { return m.map; });
+    var ifcs = st.models.filter(function (m) { return !m.lx; });
     var mismatch = false;
     for (var i = 1; i < maps.length; i++) {
       var a = maps[0].map, b = maps[i].map;
@@ -2208,7 +3175,8 @@
       '<span class="m">schéma <b>' + esc(Object.keys(schemas).join(", ")) + "</b></span>" +
       '<span class="m">trasy <b>' + nAl + "</b></span>";
     if (mismatch) html += '<span class="m is-warn">modely majú rozdielne georeferencovanie (IfcMapConversion) — nemusia na seba sedieť</span>';
-    else if (st.models.length > 1 && maps.length && maps.length < st.models.length) html += '<span class="m is-warn">georeferencovanie má len časť modelov</span>';
+    else if (ifcs.length > 1 && maps.length && maps.length < ifcs.length) html += '<span class="m is-warn">georeferencovanie má len časť modelov</span>';
+    st.models.forEach(function (m) { if (m.lxWarn) html += '<span class="m is-warn">' + esc(m.lxWarn) + "</span>"; });
     $("mdChips").innerHTML = html;
   }
 
@@ -2223,7 +3191,12 @@
           '<span class="mdm__n" title="' + esc(m.name) + '">' + esc(m.name) + "</span>" +
           '<button class="mdm__x" title="zavrieť model" data-rm="1">×</button>' +
         "</div>" +
-        '<div class="mdm__meta">' + esc(m.schema) + " · " + m.products.size.toLocaleString("sk-SK") + " prvkov" +
+        '<div class="mdm__meta">' + esc(m.schema) + " · " +
+          (m.lx ? m.products.size + " " + plural(m.products.size, "povrch", "povrchy", "povrchov") +
+                  (m.lxCode ? " · " + esc(m.lxCode) : "") +
+                  (lxNotes(m).length ? ' <span class="mdm__warn" title="' + esc(lxNotes(m).join("\n")) + '">⚠ ' +
+                    lxNotes(m).length + "</span>" : "")
+                : m.products.size.toLocaleString("sk-SK") + " prvkov") +
           (m.map ? " · E " + fmt(m.map.e, 1) + " N " + fmt(m.map.n, 1) : "") + "</div>" +
         '<details class="mdm__cls"><summary>triedy (' + cls.length + ')</summary><div class="mdm__list">' +
           cls.map(function (c) {
@@ -2239,7 +3212,8 @@
             '<span class="al__n">' + esc(a.name || "trasa " + (i + 1)) + "</span>" +
             '<button class="al__go" title="priečne rezy po trase">' + (on ? "rezy ✓" : "rezy") + "</button>" +
             '<div class="al__m">km ' + AL.formatStation(a.startStation, 1) + " – " + AL.formatStation(a.endStation, 1) +
-              " · " + fmt(a.length, 1) + " m" + (a.hasVertical ? "" : " · bez nivelety") + "</div>" +
+              " · " + fmt(a.length, 1) + " m" + (a.hasVertical ? "" : " · bez nivelety") +
+              (speedRange(a) ? " · " + esc(speedRange(a)) : "") + "</div>" +
           "</div>";
         }).join("") + "</div>";
       }
@@ -2295,12 +3269,22 @@
       return;
     }
     var m = st.sel.m, id = st.sel.id, line = null;
-    try { line = api.GetLine(m.modelID, id, false); } catch (e) { line = null; }
+    if (!m.lx) try { line = api.GetLine(m.modelID, id, false); } catch (e) { line = null; }
     var cls = m.products.get(id) ? m.products.get(id).cls : (line ? typeName(line.type) : "");
     var attrs = [];
     if (line) ["GlobalId", "Name", "Description", "ObjectType", "Tag", "LongName", "PredefinedType"].forEach(function (k) {
       if (line[k] != null && v(line[k]) != null && v(line[k]) !== "") attrs.push([k, valStr(line[k])]);
     });
+    var lp = m.lx ? m.products.get(id) : null;
+    if (lp) {
+      var crs = m.lx.crs;
+      attrs = [["Name", lp.name]];
+      if (lp.info.desc) attrs.push(["Description", lp.info.desc]);
+      attrs.push(["body", lp.info.points.toLocaleString("sk-SK")], ["trojuholníky", lp.info.faces.toLocaleString("sk-SK")]);
+      if (m.lxCode || crs) attrs.push(["súradnicový systém", m.lxCode || crs.code]);
+      if (crs && crs.name) attrs.push(["systém v hlavičke", (crs.code ? crs.code + " · " : "") + crs.name]);
+      attrs.push(["jednotky súboru", m.lx.unit]);
+    }
     var K = key(m, id);
     var doc = window.IFCDocs && IFCDocs.docFor ? IFCDocs.docFor(cls, m.schema) : null;
     var clsHtml = doc ? '<a class="doclink" href="' + esc(doc.url) + '" target="_blank" rel="noopener noreferrer" title="Dokumentácia ' + esc(doc.label) + '">' +
@@ -2311,14 +3295,15 @@
         '<button class="minibtn" data-act="focus">priblížiť</button>' +
         '<button class="minibtn" data-act="hide">skryť</button>' +
         '<button class="minibtn" data-act="iso">' + (st.isolate && st.isolate.size === 1 && st.isolate.has(K) ? "zrušiť izoláciu" : "izolovať") + "</button>" +
-        (window.ViewerTool ? '<button class="minibtn" data-act="code">v kóde →</button>' : "") +
+        (window.ViewerTool && !m.lx ? '<button class="minibtn" data-act="code">v kóde →</button>' : "") +
       "</div>" +
       '<div class="dt__sec">atribúty</div><div class="dt__attrs">' +
       (attrs.length ? attrs.map(function (a) {
         return '<div class="at"><span class="at__n">' + esc(a[0]) + '</span><span class="at__v">' + esc(a[1]) + "</span></div>";
       }).join("") : '<div class="dt__none">bez pomenovaných atribútov</div>') + "</div>" +
-      '<div class="dt__sec">vlastnosti</div><div id="mdPsets"><div class="dt__none">načítava sa…</div></div>';
+      (m.lx ? "" : '<div class="dt__sec">vlastnosti</div><div id="mdPsets"><div class="dt__none">načítava sa…</div></div>');
     el.innerHTML = html;
+    if (m.lx) return;      // LandXML nemá property sety
 
     Promise.all([
       api.properties.getPropertySets(m.modelID, id, true).catch(function () { return []; }),
@@ -2365,6 +3350,24 @@
     }
   }
 
+  /* Vysoká / rýchla kvalita. Prevzorkovanie platí hneď; jemnejšia teselácia
+     potrebuje geometriu z web-ifc znova, preto sa IFC modely načítajú nanovo
+     (súbory sú v pamäti, ručne zadaná poloha sa zachová). */
+  function setQuality(q) {
+    if (st.busy || q === st.quality) return;
+    st.quality = q;
+    writePref("md.quality", q);
+    syncToolbar();
+    if (three) { three.renderer.setPixelRatio(pixelRatio()); resize(); sizeSecCanvas(); }
+    var segs = QUALITY[q].segs;
+    if (!st.models.some(function (m) { return !m.lx && m.segs !== segs; })) return;
+    var files = st.models.map(function (m) { return m.file; });
+    var geo = st.geo.manual ? st.geo.georef : null;
+    window.ModelTool.reset();
+    if (geo) { st.geo.georef = geo; st.geo.manual = true; }
+    addFiles(files);
+  }
+
   /* Panel vlastností sa dá skryť — 3D pohľad sa roztiahne (ResizeObserver
      prepočíta plátno). Voľba sa pamätá medzi návštevami. */
   function setSide(open) {
@@ -2381,6 +3384,7 @@
     $("mdSideBtn").classList.toggle("is-on", st.sideOpen);
     $("mdSideBtn").classList.toggle("has-sel", !st.sideOpen && !!st.sel);
     $("mdGhost").classList.toggle("is-on", st.ghost);
+    $("mdQuality").classList.toggle("is-on", st.quality === "high");
   }
 
   function syncBar() {
@@ -2399,6 +3403,10 @@
   function ensureNames(m) {
     if (m.names) return;
     m.names = new Map();
+    if (m.lx) {
+      m.products.forEach(function (p) { m.names.set(p.id, { name: p.name || "", guid: "", tag: "" }); });
+      return;
+    }
     m.products.forEach(function (p) {
       var l = null;
       try { l = api.GetLine(m.modelID, p.id, false); } catch (e) { l = null; }
@@ -2471,6 +3479,17 @@
       applyMaterials(); syncToolbar(); drawSection();
     });
     $("mdGhost").addEventListener("click", function () { st.ghost = !st.ghost; applyMaterials(); syncToolbar(); });
+    $("mdQuality").addEventListener("click", function () { setQuality(st.quality === "high" ? "fast" : "high"); });
+    $("mdMeasure").addEventListener("click", function () { setMeasure(!meas.on); });
+    $("secMeasBtn").addEventListener("click", function () { setSecMeasure(!st.sec.meas.on); });
+    function measButtons(clear) {
+      return function (e) {
+        var b = e.target.closest("[data-mm]"); if (!b) return;
+        if (b.getAttribute("data-mm") === "copy") copyMeas(b); else clear();
+      };
+    }
+    $("mdMeas").addEventListener("click", measButtons(clearMeas3D));
+    $("secMeas").addEventListener("click", measButtons(function () { clearSecMeas(); drawSection(); }));
     $("mdSideBtn").addEventListener("click", function () { setSide(!st.sideOpen); });
     $("mdSideX").addEventListener("click", function () { setSide(false); });
     $("mdShowAll").addEventListener("click", function () {
@@ -2513,10 +3532,16 @@
     document.addEventListener("keydown", function (e) {
       if (!$("view-model").classList.contains("is-active") || !st.models.length) return;
       if (/INPUT|SELECT|TEXTAREA/.test((e.target.tagName || ""))) return;
-      if (e.key === "Escape") select(null);
+      if (e.key === "Escape") {
+        // najprv zruší rozpracované meranie, až potom výber
+        if (meas.pts.length) clearMeas3D();
+        else if (st.sec.meas.pts.length) { clearSecMeas(); drawSection(); }
+        else select(null);
+      }
       else if ((e.key === "h" || e.key === "H") && st.sel) sideAction("hide");
       else if ((e.key === "i" || e.key === "I") && st.sel) sideAction("iso");
       else if (e.key === "p" || e.key === "P") setSide(!st.sideOpen);
+      else if (e.key === "m" || e.key === "M") setMeasure(!meas.on);
       else if ((e.key === "f" || e.key === "F")) { if (st.sel) sideAction("focus"); else focusBox(visibleBox()); }
       else if (st.sec.al && (e.key === "PageDown" || e.key === "PageUp")) {
         e.preventDefault(); setStation(st.sec.station + (e.key === "PageDown" ? 1 : -1) * st.sec.step, { keepView: true });
@@ -2544,7 +3569,8 @@
     $("secNext").addEventListener("click", function () { setStation(st.sec.station + st.sec.step, { keepView: true }); });
     $("secSnapP").addEventListener("click", function () { snap(-1); });
     $("secSnapN").addEventListener("click", function () { snap(1); });
-    $("secStep").addEventListener("change", function () { st.sec.step = +this.value || 10; });
+    // krok je aj odstup stôp priečnych rezov v pozdĺžnom profile
+    $("secStep").addEventListener("change", function () { st.sec.step = +this.value || 10; if (st.sec.mode === "long") drawSection(); });
     $("secWidth").addEventListener("change", function () { st.sec.width = +this.value || 0; st.sec.view = null; refreshSection(); });
     $("secClip").addEventListener("change", function () { st.sec.clip = this.value; setClip(); requestRender(); });
     $("secLook").addEventListener("click", lookAtSection);
@@ -2602,9 +3628,10 @@
             if (o.material) o.material.dispose();
             if (o.element && o.element.parentNode) o.element.parentNode.removeChild(o.element);
           });
-          try { api.CloseModel(m.modelID); } catch (e) { /* nič */ }
+          if (m.modelID != null) try { api.CloseModel(m.modelID); } catch (e) { /* nič */ }
         });
         clearHilite();
+        clearMeas3D();
       }
       st.models = []; st.origin = null; st.sel = null; st.hidden = new Set(); st.isolate = null;
       st.sec.al = null; st.sec.data = null; st.sec.view = null; st.sec.prof = null; st.sec.pview = null;
