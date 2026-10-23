@@ -14,7 +14,7 @@
  * počíta priamo z trojuholníkov modelov a kreslí sa v 2D (odsun od osi × výška).
  * Jadro trasy je v js/ifc-alignment.js.
  *
- * LandXML (.xml): trasy a povrchy TIN z js/landxml.js. Súradnice sú v mapovom
+ * LandXML (.xml): trasy, povrchy TIN a priečne rezy z js/landxml.js. Súradnice sú v mapovom
  * systéme — ak je známe georeferencovanie IFC (IfcMapConversion alebo ručne),
  * prevedú sa ním do súradníc projektu, inak sa berú priamo. Trasa ide cez to
  * isté jadro ako IFC 4.3, takže rezy a pozdĺžny profil fungujú rovnako.
@@ -36,6 +36,22 @@
   // povrchy z LandXML — zemité odtiene, aby sa odlíšili od konštrukcií
   var SURFACE_COLORS = ["#A8957A", "#8FA37A", "#9A8FB0", "#B59A6A", "#7FA0A8"];
   var LX_CLS = "LXSURFACE";
+  // z priečnych rezov LandXML: uzavreté tvary → teleso koridoru, otvorené čiary → povrch
+  var LX_BODY = "LXCORRIDOR", LX_XSURF = "LXXSECTSURF";
+  var CORRIDOR_COLORS = ["#8C8F94", "#C9A66B", "#9DB0C4", "#B9876B", "#7E9C7A"];
+  function corridorColor(name, i) {
+    if (/asf|asph|pave|kryt|obrus|wear|binder|lo[žz]n|voz/i.test(name)) return "#55595F";
+    if (/humus|topsoil|ornic/i.test(name)) return "#7E9C6A";
+    if (/base|podklad|[šs]trk|gran|aggr|zhutn|sub|nezp|krajn|shoulder/i.test(name)) return "#B39B6B";
+    if (/curb|obrub|concr|bet[oó]n/i.test(name)) return "#C8C6C0";
+    return CORRIDOR_COLORS[i % CORRIDOR_COLORS.length];
+  }
+  // plocha (nie teleso) — v reze ostáva otvorenou čiarou
+  function isLxSurface(cls) { return cls === LX_CLS || cls === LX_XSURF; }
+  // telesá z rezov majú vrcholy presne v staničeniach rezov a na osi (odsun 0) —
+  // rovina rezu by nimi prechádzala a obrys by sa rozpadol; pri LandXML sa preto
+  // posunie o 1 mm (v kreslení nepostrehnuteľné)
+  var LX_NUDGE = 1e-3;
   // kvalita kreslenia: segs = počet úsečiek na kružnicu pri teselácii web-ifc
   // (predvolene 12 — oblé prvky sú hranaté), ss = najmenšie prevzorkovanie plátna
   // (2 = aj na bežnom monitore sa kreslí v dvojnásobnom rozlíšení a zmenšuje sa)
@@ -54,6 +70,8 @@
   function prettyCls(t) {
     // IFCWALLSTANDARDCASE → IfcWallStandardCase podľa registra schémy, ak ho poznáme
     if (t === LX_CLS) return "povrch TIN (LandXML)";
+    if (t === LX_BODY) return "teleso koridoru (LandXML)";
+    if (t === LX_XSURF) return "povrch z priečnych rezov (LandXML)";
     var D = window.IFCDocs, n = D && D.nameOf ? D.nameOf(t) : null;
     return n || pretty(t);
   }
@@ -122,7 +140,6 @@
   };
 
   var three = null;      // { renderer, scene, camera, controls, labels, … } po inicializácii
-
   // =========================================================================
   //  Scéna
   // =========================================================================
@@ -386,7 +403,7 @@
   // ---- LandXML ------------------------------------------------------------
   function loadLandXml(file, onStep) {
     return file.text().then(function (text) {
-      onStep("čítajú sa trasy a povrchy…");
+      onStep("čítajú sa trasy, povrchy a priečne rezy…");
       return new Promise(function (r) { setTimeout(r, 30); }).then(function () { return text; });
     }).then(function (text) {
       var d = LX.parse(text);
@@ -480,13 +497,17 @@
       }
       return out;
     });
-    var als = [];
+    var als = [], lofts = [];
     d.alignments.forEach(function (x) {
       var a = AL.buildAlignment({ name: x.name, hs: x.hs, vs: x.vs, startStation: x.staStart, matrix: M });
       if (!a) return;
       a.speeds = x.speeds; a.speedUnit = x.speedUnit;
       [0, a.length / 2, a.length].forEach(function (t) { var p = a.pointAt(t); grow(p.x, p.y, p.z); });
       als.push(a);
+      if (x.sections && x.sections.length) loftSections(a, x, M, d.alignments.length > 1, d.warnings).forEach(function (b) {
+        for (var i = 0; i < b.pos.length; i += 3) grow(b.pos[i], b.pos[i + 1], b.pos[i + 2]);
+        lofts.push(b);
+      });
     });
 
     // posun k stredu — súradnice v S-JTSK sú na float32 príliš veľké (ako COORDINATE_TO_ORIGIN)
@@ -497,10 +518,11 @@
     m.group.matrix.copy(st.origin).multiply(m.Mi.clone().invert());
     m.group.updateMatrixWorld(true);
 
-    d.surfaces.forEach(function (sf, si) {
-      var src = proj[si], n = src.length / 3, id = si + 1;
+    // mriežka v súradniciach projektu → produkt modelu (povrch TIN alebo útvar z rezov)
+    function addMesh(id, cls, name, src, idx, color, info) {
+      var n = src.length / 3;
       var pos = new Float32Array(n * 3), col = new Float32Array(n * 4);
-      var hex = parseInt(SURFACE_COLORS[si % SURFACE_COLORS.length].slice(1), 16);
+      var hex = parseInt(color.slice(1), 16);
       var rgb = [(hex >> 16 & 255) / 255, (hex >> 8 & 255) / 255, (hex & 255) / 255, 1];
       var bb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
       for (var k = 0; k < n; k++) {
@@ -514,22 +536,38 @@
       var geo = new T.BufferGeometry();
       geo.setAttribute("position", new T.BufferAttribute(pos, 3));
       geo.setAttribute("color", new T.BufferAttribute(col, 4));
-      geo.setIndex(new T.BufferAttribute(sf.idx.slice(), 1));
+      geo.setIndex(new T.BufferAttribute(idx.slice(), 1));
       geo.computeVertexNormals(); geo.computeBoundingBox(); geo.computeBoundingSphere();
-      var mat = new T.MeshLambertMaterial({ vertexColors: true, side: T.DoubleSide,
+      // telesá koridoru majú ostré hrany — tieňujú sa po plôškach
+      var mat = new T.MeshLambertMaterial({ vertexColors: true, side: T.DoubleSide, flatShading: cls === LX_BODY,
         polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
-      var ch = { m: m, cls: LX_CLS, transparent: false, posA: pos, idxA: sf.idx, colA: col,
-                 ranges: [{ start: 0, count: sf.idx.length, id: id }], mesh: null };
+      var ch = { m: m, cls: cls, transparent: false, posA: pos, idxA: idx, colA: col,
+                 ranges: [{ start: 0, count: idx.length, id: id }], mesh: null };
       ch.mesh = new T.Mesh(geo, mat);
       ch.mesh.userData.ch = ch;
       m.group.add(ch.mesh);
       m.chunks.push(ch);
-      m.products.set(id, { id: id, cls: LX_CLS, parts: [{ ch: ch, start: 0, count: sf.idx.length }], bb: bb,
-        color: rgb, name: sf.name, info: sf });
+      m.products.set(id, { id: id, cls: cls, parts: [{ ch: ch, start: 0, count: idx.length }], bb: bb,
+        color: rgb, name: name, info: info });
+    }
+    d.surfaces.forEach(function (sf, si) {
+      addMesh(si + 1, LX_CLS, sf.name, proj[si], sf.idx, SURFACE_COLORS[si % SURFACE_COLORS.length], sf);
     });
-    var c = m.classes.get(LX_CLS);
-    if (m.products.size) m.classes.set(LX_CLS, { n: m.products.size, visible: c ? c.visible : true });
-    else m.classes.delete(LX_CLS);
+    lofts.forEach(function (b, i) {
+      addMesh(d.surfaces.length + i + 1, b.cls, b.name, b.pos, b.idx,
+        b.cls === LX_BODY ? corridorColor(b.name, i) : SURFACE_COLORS[(d.surfaces.length + i) % SURFACE_COLORS.length], b.info);
+    });
+    // pri telesách koridoru sú čiary z rezov väčšinou pomocné spojnice (kóty, šrafy) —
+    // predvolene sa skryjú
+    var vis = {}, bodies = lofts.some(function (b) { return b.cls === LX_BODY; });
+    m.classes.forEach(function (c, k) { vis[k] = c.visible; });
+    m.classes = new Map();
+    m.products.forEach(function (p) {
+      var c = m.classes.get(p.cls);
+      if (!c) m.classes.set(p.cls, c = { n: 0, visible: p.cls in vis ? vis[p.cls] : !(bodies && p.cls === LX_XSURF) });
+      c.n++;
+    });
+    m.chunks.forEach(function (ch) { if (!m.classes.get(ch.cls).visible) ch.mesh.visible = false; });
 
     als.forEach(function (a, i) {
       a.visible = true; a.key = m.uid + ":" + i;
@@ -541,8 +579,337 @@
     if (reopen >= 0 && m.alignments[reopen]) openSection(m, m.alignments[reopen]);
   }
 
+  /* Koridor z priečnych rezov trasy (LandXML CrossSects, js/landxml.js). Tvary
+     s rovnakým názvom a stranou sa v susedných rezoch spárujú podľa najbližšieho
+     ťažiska a spoja plochou. Výšky od nivelety (Civil 3D) sa rozpoznajú a niveleta
+     sa k nim pripočíta. Medzi rezmi sa tvar mení
+     lineárne, poloha sa však drží osi trasy (oblúky) a zmena výšky nivelety sa
+     pripočíta (výškové oblúky). Uzavreté tvary (vrstvy vozovky) dostanú na začiatku
+     a konci súvislého úseku čelá — sú to telesá. Výsledok je v súradniciach projektu:
+     [{ cls, name, pos: Float64Array, idx: Uint32Array, info }]. */
+  function loftSections(a, x, M, multi, warnings) {
+    var k = Math.hypot(M[0], M[1]) || 1;     // mierka georeferencovania pre odsuny
+    function warn(msg) { if (warnings.indexOf(msg) < 0) warnings.push(msg); }
+    var secs = x.sections.filter(function (s) {
+      return s.sta >= a.startStation - 0.01 && s.sta <= a.endStation + 0.01;
+    });
+    var off = x.sections.length - secs.length;
+    if (off) warn("trasa " + a.name + ": " + off + " " + plural(off, "priečny rez je", "priečne rezy sú", "priečnych rezov je") +
+                  " mimo jej dĺžky — vynecháva" + (off === 1 ? "" : "jú") + " sa");
+
+    // výšky v rezoch sú absolútne, alebo (Civil 3D) od nivelety trasy — rozhodne
+    // väčšina bodov, zvlášť pre tvary návrhu (D) a rezy povrchov (G)
+    var zProf = secs.map(function (s) { return a.atStation(s.sta).z - M[14]; });
+    var rel = { D: false, G: false };
+    if (a.hasVertical) ["D", "G"].forEach(function (kind) {
+      var near = 0, tot = 0;
+      secs.forEach(function (s, i) {
+        s.surfs.forEach(function (sf) {
+          if ((sf.design ? "D" : "G") !== kind) return;
+          sf.pts.forEach(function (p) { tot++; if (Math.abs(p[1]) < Math.abs(p[1] - zProf[i])) near++; });
+        });
+      });
+      rel[kind] = tot > 0 && near > tot / 2;
+    });
+
+    // tvary rezov s väzbou na tvar v susednom reze — rovnaký druh, názov a strana,
+    // najpodobnejší rozsah (ľavý a pravý okraj, priemerná výška). Rovnaký názov
+    // býva v reze viackrát (Civil 3D: vrstva pod vozovkou aj pod žľabom), preto
+    // rozhoduje poloha; tvar sa smie zmeniť najviac o svoju šírku (aspoň o 6 m v súčte okrajov a výšky)
+    var items = secs.map(function (s, si) {
+      return s.surfs.map(function (sf) {
+        var lo = Infinity, hi = -Infinity, z = 0, c = 0;
+        sf.pts.forEach(function (p) { z += p[1]; c += p[0]; if (p[0] < lo) lo = p[0]; if (p[0] > hi) hi = p[0]; });
+        var kind = sf.design ? "D" : "G";
+        z /= sf.pts.length;
+        if (!rel[kind]) z -= zProf[si];      // absolútne výšky sa porovnávajú voči nivelete
+        // útvar = druh + názov + uzavretosť — Civil 3D volá rovnako vrstvu aj spojnicu
+        // na jej okraji; otvorená plocha v telese by rozbila jeho obrys v reze
+        return { sf: sf, kind: kind, g: kind + "|" + sf.name + "|" + sf.closed, key: kind + "|" + sf.name + "|" + sf.side + "|" + sf.closed,
+                 lo: lo, hi: hi, z: z, c: c / sf.pts.length, w: hi - lo, prev: null, next: null };
+      });
+    });
+    function cost(p, q) { return Math.abs(p.lo - q.lo) + Math.abs(p.hi - q.hi) + Math.abs(p.z - q.z); }
+    // rozšírenie posunie celý tvar — posun o s dá cenu 2s; do 3 m (alebo šírky tvaru) je to ten istý tvar
+    function near(p, q) { return cost(p, q) <= Math.max(6, p.w, q.w); }
+    for (var i = 0; i + 1 < items.length; i++) {
+      var groups = new Map();
+      items[i].forEach(function (p) { var g = groups.get(p.key) || groups.set(p.key, [[], []]).get(p.key); g[0].push(p); });
+      items[i + 1].forEach(function (q) { var g = groups.get(q.key); if (g) g[1].push(q); });
+      groups.forEach(function (g) {
+        var A = g[0], B = g[1];
+        if (!B.length) return;
+        // rovnaký počet — poradie zľava doprava sa zachová, aj keď sa celé usporiadanie
+        // posunie (rozšírenie); podľa vzdialenosti by sa dva podobné tvary vedľa seba
+        // (vrstva pod žľabom a klin pod krajnicou) mohli spárovať krížom
+        if (A.length === B.length) {
+          var ord = function (p, q) { return p.c - q.c || p.z - q.z; };
+          A.sort(ord); B.sort(ord);
+          if (A.every(function (p, k) { return near(p, B[k]); })) {
+            A.forEach(function (p, k) { p.next = B[k]; B[k].prev = p; });
+            return;
+          }
+        }
+        var cand = [];
+        A.forEach(function (p) { B.forEach(function (q) { if (near(p, q)) cand.push([cost(p, q), p, q]); }); });
+        cand.sort(function (u, v) { return u[0] - v[0]; }).forEach(function (cd) {
+          if (!cd[1].next && !cd[2].prev) { cd[1].next = cd[2]; cd[2].prev = cd[1]; }
+        });
+      });
+    }
+
+    var out = new Map();                     // skupina (návrh/povrch + názov + uzavretosť) → útvar
+    function body(g, sf) {
+      var b = out.get(g);
+      if (!b) {
+        b = { g: g, name: (multi ? a.name + " · " : "") + sf.name, design: sf.design, closed: sf.closed,
+              material: sf.material, pos: [], idx: [], stations: new Set() };
+        out.set(g, b);
+      }
+      return b;
+    }
+    function put(b, s, p, o, z) {
+      b.pos.push(p.x + o * k * p.ty, p.y - o * k * p.tx, z + M[14]);
+      b.stations.add(s);
+    }
+
+    /* Úsek, v ktorom sa niektorý uzavretý tvar objaví alebo zanikne (koniec žľabu,
+       nový dosyp…), sa nedá plynulo spojiť tak, aby tvary na seba presne nadväzovali
+       — v reze by medzi nimi ostali prázdne miesta. V takom úseku sa celý rez do
+       polovice drží tvarov z predchádzajúceho rezu a od polovice tvarov z ďalšieho:
+       tvary jedného rezu do seba presne zapadajú (v polovici úseku je schodík).
+       Tvar, pri ktorom susedný rez v tom mieste nemá nič (koniec koridoru), končí
+       čelom priamo v reze. */
+    var step = secs.map(function (s, k) {
+      if (k + 1 >= secs.length) return false;
+      if (items[k].some(function (o) { return o.sf.closed && !o.next; }) ||
+          items[k + 1].some(function (o) { return o.sf.closed && !o.prev; })) return true;
+      // rovnaké tvary, ale iný počet bodov — plynulo, ak v polovici úseku nevznikne medzera
+      return items[k].some(function (o) { return o.sf.closed && o.next.sf.pts.length !== o.sf.pts.length; }) && gapAtMid(k);
+    });
+    /* Vznikne pri plynulom spojení v polovici úseku k medzi tvarmi prázdne miesto?
+       Tvary sa nakreslia na mriežku a spočíta sa plocha uzavretá tvarmi, ktorá nie
+       je pokrytá; porovná sa s rezmi na koncoch úseku (vzduch v návrhu, napr. pod
+       priechodným prierezom, nie je chyba). */
+    function gapAtMid(k) {
+      var P0 = [], P1 = [], Pm = [];
+      items[k].forEach(function (o) {
+        if (!o.sf.closed) return;
+        var mt = matchShapes(o.sf.pts, o.next.sf.pts, true);
+        P0.push(o.sf.pts); P1.push(o.next.sf.pts);
+        Pm.push(mt[0].map(function (p, q) { return [(p[0] + mt[1][q][0]) / 2, (p[1] + mt[1][q][1]) / 2]; }));
+      });
+      return voidArea(Pm) > Math.max(voidArea(P0), voidArea(P1)) + 0.002;
+    }
+    function covered(it, k) {
+      return items[k].some(function (o) {
+        return o.sf.closed && o.kind === it.kind && o.lo < it.hi + 1 && o.hi > it.lo - 1;
+      });
+    }
+
+    for (i = 0; i < secs.length; i++) {
+      items[i].forEach(function (it) {
+        var A = it.sf, closed = A.closed, isRel = rel[it.kind], b = body(it.g, A);
+        if (!closed) {
+          if (it.next) { var mt = matchShapes(A.pts, it.next.sf.pts, false); loft(b, i, mt[0], mt[1], false, isRel); }
+          return;
+        }
+        var back = false, fwd = false;
+        if (i + 1 < secs.length && step[i]) {
+          if (it.next || covered(it, i + 1)) { loft(b, i, A.pts, A.pts, true, isRel, 0, 0.5); capAt(b, i, 0.5, A.pts, isRel); fwd = true; }
+        } else if (it.next) {
+          var mc = matchShapes(A.pts, it.next.sf.pts, true);
+          loft(b, i, mc[0], mc[1], true, isRel); fwd = true;
+        }
+        if (i > 0 && step[i - 1]) {
+          if (it.prev || covered(it, i - 1)) { loft(b, i - 1, A.pts, A.pts, true, isRel, 0.5, 1); capAt(b, i - 1, 0.5, A.pts, isRel); back = true; }
+        } else if (it.prev) back = true;
+        // čelo tam, kde teleso začína alebo končí
+        if (back !== fwd) cap(b, secs[i].sta, a.atStation(secs[i].sta), A.pts, isRel);
+      });
+    }
+    if (rel.D || rel.G) warn("výšky v priečnych rezoch sú od nivelety trasy — pripočítala sa niveleta");
+
+    // výška k bodu rezu v pomernej polohe t medzi rezmi i a i+1: relatívne výšky sedia
+    // na nivelete, absolútnym sa pripočíta jej odklon od priamky medzi rezmi
+    function zOff(i, t, p, isRel) {
+      if (isRel) return p.z - M[14];
+      var pA = a.atStation(secs[i].sta), pB = a.atStation(secs[i + 1].sta);
+      return p.hasZ ? p.z - (pA.z + (pB.z - pA.z) * t) : 0;
+    }
+    // plocha medzi rezmi i a i+1 zo spárovaných bodov qa → qb (voliteľne len časť úseku t0…t1)
+    function loft(b, i, qa, qb, closed, isRel, t0, t1) {
+      if (t0 == null) { t0 = 0; t1 = 1; }
+      var n = qa.length, s1 = secs[i].sta, s2 = secs[i + 1].sta, pA = a.atStation(s1), pB = a.atStation(s2);
+      // zahustenie: oblúk po ~0,5°, zmena sklonu nivelety po ~2 m
+      var dTh = Math.abs(Math.atan2(pA.tx * pB.ty - pA.ty * pB.tx, pA.tx * pB.tx + pA.ty * pB.ty));
+      var nsub = Math.ceil(dTh / (0.5 * Math.PI / 180));
+      if (pA.hasZ && Math.abs(pA.gradient - pB.gradient) > 1e-6) nsub = Math.max(nsub, Math.ceil((s2 - s1) / 2));
+      nsub = Math.max(1, Math.min(nsub, Math.ceil(s2 - s1)));
+      nsub = Math.max(1, Math.round(nsub * (t1 - t0)));
+      var base = b.pos.length / 3, j, q;
+      for (j = 0; j <= nsub; j++) {
+        var t = t0 + (t1 - t0) * j / nsub, s = s1 + (s2 - s1) * t, p = a.atStation(s), dz = zOff(i, t, p, isRel);
+        for (q = 0; q < n; q++) {
+          put(b, s, p, qa[q][0] + (qb[q][0] - qa[q][0]) * t, qa[q][1] + (qb[q][1] - qa[q][1]) * t + dz);
+        }
+      }
+      // uhlopriečka štvoruholníka podľa polohy jeho bodov, nie podľa smeru obchádzania —
+      // susedné tvary majú spoločnú hranu opačne a inak by stenu rozdelili inak
+      // (skrútená stena → medzera medzi telesami)
+      var cols = closed ? n : n - 1;
+      for (q = 0; q < cols; q++) {
+        var q1 = (q + 1) % n, P0 = qa[q], P1 = qa[q1];
+        var flip = P0[0] !== P1[0] ? P0[0] > P1[0] : P0[1] !== P1[1] ? P0[1] > P1[1] : qb[q][0] > qb[q1][0];
+        for (j = 0; j < nsub; j++) {
+          var r0 = base + j * n, r1 = r0 + n;
+          if (!flip) b.idx.push(r0 + q, r0 + q1, r1 + q1, r0 + q, r1 + q1, r1 + q);
+          else b.idx.push(r0 + q, r0 + q1, r1 + q, r0 + q1, r1 + q1, r1 + q);
+        }
+      }
+    }
+    // čelo v pomernej polohe t medzi rezmi i a i+1
+    function capAt(b, i, t, pts, isRel) {
+      var s = secs[i].sta + (secs[i + 1].sta - secs[i].sta) * t, p = a.atStation(s);
+      cap(b, s, p, pts, isRel, zOff(i, t, p, isRel));
+    }
+    function cap(b, s, p, pts, isRel, dzIn) {
+      var tri, dz = dzIn != null ? dzIn : isRel ? p.z - M[14] : 0;
+      try { tri = Lib.T.ShapeUtils.triangulateShape(pts.map(function (q) { return new Lib.T.Vector2(q[0], q[1]); }), []); }
+      catch (e) { return; }
+      var base = b.pos.length / 3;
+      pts.forEach(function (q) { put(b, s, p, q[0], q[1] + dz); });
+      tri.forEach(function (t) { b.idx.push(base + t[0], base + t[1], base + t[2]); });
+    }
+
+    var res = [];
+    out.forEach(function (b) {
+      if (!b.idx.length) return;
+      var ss = Array.from(b.stations), lo = Math.min.apply(null, ss), hi = Math.max.apply(null, ss);
+      var attrs = [["staničenie", AL.formatStation(lo, 2) + " – " + AL.formatStation(hi, 2)],
+                   ["druh", b.closed ? "uzavretý tvar (vrstva)" : b.design ? "otvorená čiara návrhu" : "povrch v reze"]];
+      if (b.material) attrs.push(["materiál", b.material]);
+      attrs.push(["trasa", a.name]);
+      res.push({ cls: b.closed ? LX_BODY : LX_XSURF, name: b.name, pos: Float64Array.from(b.pos), idx: Uint32Array.from(b.idx),
+                 info: { desc: "", attrs: attrs, points: b.pos.length / 3, faces: b.idx.length / 3 } });
+    });
+    return res;
+  }
+
+  /* Plocha (m²) prázdnych miest uzavretých tvarmi rezu — tvary [[o, z], …] sa vyplnia
+     na mriežke, prázdno sa zaleje od okraja a čo ostane nezaliate, je medzera. */
+  var voidCanvas = null;
+  function voidArea(polys) {
+    var lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+    polys.forEach(function (P) { P.forEach(function (p) {
+      if (p[0] < lo[0]) lo[0] = p[0]; if (p[1] < lo[1]) lo[1] = p[1];
+      if (p[0] > hi[0]) hi[0] = p[0]; if (p[1] > hi[1]) hi[1] = p[1];
+    }); });
+    if (!polys.length) return 0;
+    var cell = Math.max(0.02, Math.max(hi[0] - lo[0], hi[1] - lo[1]) / 2000);
+    var W = Math.ceil((hi[0] - lo[0]) / cell) + 4, H = Math.ceil((hi[1] - lo[1]) / cell) + 4;
+    var cv = voidCanvas || (voidCanvas = document.createElement("canvas"));
+    cv.width = W; cv.height = H;
+    var ctx = cv.getContext("2d", { willReadFrequently: true });
+    ctx.clearRect(0, 0, W, H);
+    ctx.beginPath();
+    polys.forEach(function (P) {
+      P.forEach(function (p, i) {
+        var x = (p[0] - lo[0]) / cell + 2, y = H - ((p[1] - lo[1]) / cell + 2);
+        if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+      });
+      ctx.closePath();
+    });
+    ctx.fill("nonzero");
+    var D = ctx.getImageData(0, 0, W, H).data, n = W * H, mark = new Uint8Array(n), stack = [], k;
+    for (k = 0; k < n; k++) if (D[k * 4 + 3] > 100) mark[k] = 1;          // pokryté
+    for (k = 0; k < W; k++) stack.push(k, n - W + k);
+    for (k = 0; k < H; k++) stack.push(k * W, k * W + W - 1);
+    while (stack.length) {                                                 // vonkajšie prázdno
+      var q = stack.pop();
+      if (mark[q]) continue;
+      mark[q] = 2;
+      var x = q % W;
+      if (x > 0) stack.push(q - 1);
+      if (x < W - 1) stack.push(q + 1);
+      if (q >= W) stack.push(q - W);
+      if (q < n - W) stack.push(q + W);
+    }
+    var holes = 0;
+    for (k = 0; k < n; k++) if (!mark[k]) holes++;
+    return holes * cell * cell;
+  }
+
+  /* Dva tvary rezu na rovnaký počet bodov, aby sa dali spojiť plochou. Pri rovnakom
+     počte sa body párujú podľa poradia (uzavretý tvar s najlepším pootočením),
+     inak sa body oboch tvarov doplnia na spoločné miesta podľa pomernej dĺžky —
+     zlomy oboch tvarov ostanú zachované. */
+  function matchShapes(A, B, closed) {
+    function area(P) {
+      var s = 0;
+      for (var i = 0; i < P.length; i++) { var p = P[i], q = P[(i + 1) % P.length]; s += p[0] * q[1] - q[0] * p[1]; }
+      return s;
+    }
+    function d2(p, q) { return (p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1]); }
+    function rot(P, r) { return P.slice(r).concat(P.slice(0, r)); }
+    if (closed) {
+      if (area(A) * area(B) < 0) B = B.slice().reverse();
+      var best = 0, bestD = Infinity;
+      for (var r = 0; r < B.length; r++) {
+        var s = 0;
+        if (B.length === A.length) for (var i = 0; i < A.length; i++) s += d2(A[i], B[(i + r) % B.length]);
+        else s = d2(A[0], B[r]);
+        if (s < bestD) { bestD = s; best = r; }
+      }
+      B = rot(B, best);
+    } else if (d2(A[0], B[B.length - 1]) + d2(A[A.length - 1], B[0]) < d2(A[0], B[0]) + d2(A[A.length - 1], B[B.length - 1])) {
+      B = B.slice().reverse();
+    }
+    if (A.length === B.length) return [A, B];
+
+    /* Rôzny počet bodov: body sa spárujú s najbližšími pri zachovanom poradí
+       pozdĺž obrysu (DTW), pribudnutý bod sa spáruje s bližším susedom. Bod, ktorý
+       majú dve susedné vrstvy spoločný, sa tak v oboch spáruje rovnako — spoločná
+       hrana medzi rezmi nerozíde a nevznikne medzi vrstvami škára. */
+    function dtw(P, Q) {
+      var n = P.length, m = Q.length, C = new Float64Array(n * m), K = new Int8Array(n * m);
+      for (var i = 0; i < n; i++) for (var j = 0; j < m; j++) {
+        var c = Math.sqrt(d2(P[i], Q[j])), b = Infinity, k = -1, o = i * m + j;
+        if (i === 0 && j === 0) b = 0;
+        if (i > 0 && j > 0 && C[o - m - 1] < b) { b = C[o - m - 1]; k = 0; }
+        if (i > 0 && C[o - m] < b) { b = C[o - m]; k = 1; }
+        if (j > 0 && C[o - 1] < b) { b = C[o - 1]; k = 2; }
+        C[o] = b + c; K[o] = k;
+      }
+      var pa = [], pb = [];
+      for (i = n - 1, j = m - 1; ;) {
+        pa.push(P[i]); pb.push(Q[j]);
+        var kk = K[i * m + j];
+        if (kk < 0) break;
+        if (kk === 0) { i--; j--; } else if (kk === 1) i--; else j--;
+      }
+      return { cost: C[n * m - 1], a: pa.reverse(), b: pb.reverse() };
+    }
+    if (!closed) { var r1 = dtw(A, B); return [r1.a, r1.b]; }
+    // uzavretý tvar — najlepší začiatok obrysu B
+    var bestR = null;
+    for (var r2 = 0; r2 < B.length; r2++) {
+      var res = dtw(A, rot(B, r2));
+      if (!bestR || res.cost < bestR.cost) bestR = res;
+    }
+    return [bestR.a, bestR.b];
+  }
+
   // upozornenia k LandXML — z čítania súboru a k súradnicovému systému
   function lxNotes(m) { return (m.lxNote ? [m.lxNote] : []).concat(m.lx.warnings); }
+  // počty v zozname modelov — povrchy a telesá koridoru
+  function lxSummary(m) {
+    var nb = 0;
+    m.products.forEach(function (p) { if (p.cls === LX_BODY) nb++; });
+    var ns = m.products.size - nb;
+    return [ns || !nb ? ns + " " + plural(ns, "povrch", "povrchy", "povrchov") : "",
+            nb ? nb + " " + plural(nb, "teleso", "telesá", "telies") + " koridoru" : ""].filter(Boolean).join(" · ");
+  }
 
   // návrhová rýchlosť (LandXML) — v danom staničení a súhrn za celú trasu
   function speedAt(a, stn) {
@@ -1258,6 +1625,7 @@
       var Tn = F.T.clone().transformDirection(inv), Rt = F.R.clone().transformDirection(inv), U = F.U.clone().transformDirection(inv);
       var px = P.x, py = P.y, pz = P.z, tx = Tn.x, ty = Tn.y, tz = Tn.z;
       var rx = Rt.x, ry = Rt.y, rz = Rt.z, ux = U.x, uy = U.y, uz = U.z, z0 = F.p.z;
+      if (m.lx) { px += tx * LX_NUDGE; py += ty * LX_NUDGE; pz += tz * LX_NUDGE; }
       m.products.forEach(function (prod) {
         if (!productShown(m, prod)) return;
         var bb = prod.bb, neg = false, pos = false;
@@ -1306,7 +1674,8 @@
           segs = keep;
           if (!segs.length) return;
         }
-        var ch = chain(segs, !m.isTerrain && prod.cls !== LX_CLS);
+        var ch = chain(segs, !m.isTerrain && !isLxSurface(prod.cls));
+        if (prod.cls === LX_BODY) orientLoops(ch.loops);
         items.push({ m: m, id: prod.id, cls: prod.cls, color: prod.color, segs: segs, loops: ch.loops, open: ch.open });
       });
     });
@@ -1339,6 +1708,23 @@
       }
     });
     return { station: stn, frame: F, items: items, bb: bb };
+  }
+
+  /* Pravidlo výplne obrysov prvku v reze. Prvok z IFC môže mať otvory — evenodd.
+     Teleso koridoru z LandXML otvory nemá, ale jeho tvary s rovnakým názvom sa
+     prekrývajú (Civil 3D: vrstvy pod žľabom ležia cez vrstvy pruhu) — pri evenodd
+     by prekryv ostal prázdny. Jeho obrysy sa preto otočia rovnakým smerom
+     (orientLoops) a vyplnia ako zjednotenie (nonzero). */
+  function fillRule(it) { return it.cls === LX_BODY ? "nonzero" : "evenodd"; }
+  function orientLoops(loops) {
+    loops.forEach(function (L) {
+      var a = 0, n = L.length;
+      for (var i = 0; i < n; i += 2) { var j = (i + 2) % n; a += L[i] * L[j + 1] - L[j] * L[i + 1]; }
+      if (a >= 0) return;
+      for (var lo = 0, hi = n - 2; lo < hi; lo += 2, hi -= 2) {
+        var u = L[lo], v = L[lo + 1]; L[lo] = L[hi]; L[lo + 1] = L[hi + 1]; L[hi] = u; L[hi + 1] = v;
+      }
+    });
   }
 
   /* Je vrchol i „za“ vrcholom j? Priesečník hrany s rovinou sa počíta vždy od
@@ -1656,7 +2042,7 @@
         path.closePath();
       });
       ctx.fillStyle = isSel ? "rgba(242,169,0,.55)" : itemColor(it, 0.38);
-      ctx.fill(path, "evenodd");
+      ctx.fill(path, fillRule(it));
       ctx.strokeStyle = isSel ? "#9C6A00" : strokeColor(it);
       ctx.lineWidth = isSel ? 2 : 1.1;
       ctx.stroke(path);
@@ -1699,7 +2085,7 @@
     var ctx = sec2d.ctx;
     for (var i = sec2d.paths.length - 1; i >= 0; i--) {
       if (sec2d.paths[i].it.m.isTerrain) continue;
-      if (ctx.isPointInPath(sec2d.paths[i].path, x * (sec2d.cv.width / sec2d.w), y * (sec2d.cv.height / sec2d.h), "evenodd")) return sec2d.paths[i].it;
+      if (ctx.isPointInPath(sec2d.paths[i].path, x * (sec2d.cv.width / sec2d.w), y * (sec2d.cv.height / sec2d.h), fillRule(sec2d.paths[i].it))) return sec2d.paths[i].it;
     }
     // najbližšia čiara do 6 px
     var V = st.sec.view, best = null, bd = 6;
@@ -1902,7 +2288,8 @@
           // krajné úseky siahajú kúsok za koniec trasy — teselácia telies končí
           // o milimetre ďalej a ich čelá by inak vypadli (obrys by sa neuzavrel)
           var lo = si === 0 ? -0.5 : 0, hi = si === L.length - 2 ? len + 0.5 : len;
-          cutProduct(p, A0, tx, tz, nx, nz, len, lo, hi, st0, dSt, z0, ux, uy, uz, function (x1, y1, x2, y2) {
+          var Ac = m.lx ? { x: A0.x + nx * LX_NUDGE, y: A0.y, z: A0.z + nz * LX_NUDGE } : A0;
+          cutProduct(p, Ac, tx, tz, nx, nz, len, lo, hi, st0, dSt, z0, ux, uy, uz, function (x1, y1, x2, y2) {
             if (!out) { out = []; segsOf.set(p.id, out); }
             out.push(x1, y1, x2, y2);
           });
@@ -1914,7 +2301,7 @@
           if (segs[i] < bb[0]) bb[0] = segs[i]; if (segs[i] > bb[2]) bb[2] = segs[i];
           if (segs[i + 1] < bb[1]) bb[1] = segs[i + 1]; if (segs[i + 1] > bb[3]) bb[3] = segs[i + 1];
         }
-        var ch = chain(segs, !m.isTerrain && prod.cls !== LX_CLS);
+        var ch = chain(segs, !m.isTerrain && !isLxSurface(prod.cls));
         // prvok, ktorý pokračuje za začiatok či koniec trasy, je na hranici profilu
         // odrezaný — obrys s oboma koncami na tejto hranici sa uzavrie zvislou čiarou
         var edgeA = a.startStation - 0.5, edgeB = a.endStation + 0.5;
@@ -1924,6 +2311,7 @@
           if (Lp.length >= 6 && onEdge(Lp[0]) && onEdge(Lp[Lp.length - 2])) { ch.loops.push(Lp); return false; }
           return true;
         });
+        if (prod.cls === LX_BODY) orientLoops(ch.loops);
         items.push({ m: m, id: id, cls: prod.cls, color: prod.color, segs: segs, loops: ch.loops, open: ch.open });
       });
     });
@@ -2004,7 +2392,7 @@
      podľa názvu), inak terén z mapových podkladov. */
   function profSurface(pr) {
     if (pr.surface !== undefined) return pr.surface;
-    var cand = pr.items.filter(function (it) { return it.m.isTerrain || it.cls === LX_CLS; });
+    var cand = pr.items.filter(function (it) { return it.m.isTerrain || isLxSurface(it.cls); });
     var named = cand.filter(function (it) {
       var p = it.m.products && it.m.products.get(it.id);
       return p && /^(EG|OG)\b|ter[eé]n|existing|p[oô]vodn/i.test(p.name || "");
@@ -2125,7 +2513,7 @@
         path.closePath();
       });
       ctx.fillStyle = isSel ? "rgba(242,169,0,.55)" : itemColor(it, 0.38);
-      ctx.fill(path, "evenodd");
+      ctx.fill(path, fillRule(it));
       ctx.strokeStyle = isSel ? "#9C6A00" : strokeColor(it);
       ctx.lineWidth = isSel ? 2 : 1;
       ctx.stroke(path);
@@ -2331,7 +2719,7 @@
     var ctx = sec2d.ctx, sx = sec2d.cv.width / sec2d.w, sy = sec2d.cv.height / sec2d.h;
     for (var i = sec2d.paths.length - 1; i >= 0; i--) {
       if (sec2d.paths[i].it.m.isTerrain) continue;
-      if (ctx.isPointInPath(sec2d.paths[i].path, x * sx, y * sy, "evenodd")) return sec2d.paths[i].it;
+      if (ctx.isPointInPath(sec2d.paths[i].path, x * sx, y * sy, fillRule(sec2d.paths[i].it))) return sec2d.paths[i].it;
     }
     return null;
   }
@@ -3043,7 +3431,7 @@
       '<div class="drop drop--tall" id="mdDrop">' + UPLOAD_ICON +
         '<div class="drop__main">presuňte sem .ifc alebo LandXML — aj viac naraz</div>' +
         '<div class="drop__hint">alebo kliknite pre výber · modely sa zobrazia spolu na koordináciu · ' +
-          'z LandXML sa načítajú trasy a povrchy TIN</div>' +
+          'z LandXML sa načítajú trasy, povrchy TIN a priečne rezy (teleso koridoru)</div>' +
       "</div>";
     var dz = $("mdDrop");
     dz.addEventListener("click", function () { $("fileM").click(); });
@@ -3192,7 +3580,7 @@
           '<button class="mdm__x" title="zavrieť model" data-rm="1">×</button>' +
         "</div>" +
         '<div class="mdm__meta">' + esc(m.schema) + " · " +
-          (m.lx ? m.products.size + " " + plural(m.products.size, "povrch", "povrchy", "povrchov") +
+          (m.lx ? lxSummary(m) +
                   (m.lxCode ? " · " + esc(m.lxCode) : "") +
                   (lxNotes(m).length ? ' <span class="mdm__warn" title="' + esc(lxNotes(m).join("\n")) + '">⚠ ' +
                     lxNotes(m).length + "</span>" : "")
@@ -3280,6 +3668,7 @@
       var crs = m.lx.crs;
       attrs = [["Name", lp.name]];
       if (lp.info.desc) attrs.push(["Description", lp.info.desc]);
+      if (lp.info.attrs) attrs = attrs.concat(lp.info.attrs);
       attrs.push(["body", lp.info.points.toLocaleString("sk-SK")], ["trojuholníky", lp.info.faces.toLocaleString("sk-SK")]);
       if (m.lxCode || crs) attrs.push(["súradnicový systém", m.lxCode || crs.code]);
       if (crs && crs.name) attrs.push(["systém v hlavičke", (crs.code ? crs.code + " · " : "") + crs.name]);

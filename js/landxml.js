@@ -1,4 +1,4 @@
-/* landxml.js — čítanie LandXML 1.x (trasy a povrchy TIN) pre 3D prehliadač.
+/* landxml.js — čítanie LandXML 1.x (trasy, povrchy TIN a priečne rezy) pre 3D prehliadač.
  *
  * Funguje v prehliadači (DOMParser) aj v Node, ak sa mu podá parser XML.
  * Výsledok nemá súradnice scény — sú v mapovom systéme súboru (E, N, výška
@@ -9,6 +9,8 @@
  *             to isté jadro ako IFC 4.3 (js/ifc-alignment.js); niveleta z prvého
  *             <ProfAlign> (PVI, ParaCurve, UnsymParaCurve, CircCurve).
  *             Návrhová rýchlosť z <Feature name="SpeedStation"> (zápis Civil 3D).
+ *   rezy    — priečne rezy trasy z <CrossSects> (CrossSectSurf, DesignCrossSectSurf);
+ *             js/model.js z nich poskladá teleso koridoru.
  *   povrchy — <Surface><Definition surfType="TIN"> s bodmi <P> a trojuholníkmi <F>.
  *
  * Poradie súradníc v LandXML je „sever východ výška“ (N E Z).
@@ -169,7 +171,8 @@
     }
     for (var j = 1; j < nodes.length - 1; j++) {
       var nd = nodes[j], Lt = nd.lin + nd.lout;
-      if (!(Lt > 0)) continue;
+      // lomový bod bez oblúka — sklon sa mení priamo v ňom
+      if (!(Lt > 0)) { tangent(nd.sta, j - 1); cursor = Math.max(cursor, nd.sta); continue; }
       var bc = nd.sta - nd.lin;
       tangent(bc, j - 1);
       vs.push({ type: nd.circ ? "CIRCULARARC" : "PARABOLICARC", start: bc - staStart, len: Lt,
@@ -192,6 +195,112 @@
       if (isFinite(o.speed) && o.speed > 0) out.push({ station: (isFinite(o.station) ? o.station : 0) * f, speed: o.speed });
     });
     return out.sort(function (a, b) { return a.station - b.station; });
+  }
+
+  // ---- priečne rezy ------------------------------------------------------------
+  /* <CrossSects><CrossSect sta> pri trase (Civil 3D: vzorkovacie čiary). Body sú
+     „odsun výška“ — odsun záporný doľava, kladný doprava od osi. Výška môže byť
+     absolútna alebo (Civil 3D) od nivelety trasy — rozhoduje js/model.js.
+       CrossSectSurf       — rez povrchom (terén, povrch koridoru), <PntList2D>
+       DesignCrossSectSurf — tvar koridoru z <CrossSectPnt>; closedArea = uzavretá
+                             plocha (vrstva vozovky), inak otvorená čiara (spojnice)
+     Civil 3D zapisuje každú spojnicu zvlášť (dva body) — rovnako pomenované sa
+     pospájajú do lomených čiar; bezmenné sú len obrysy tvarov a vynechajú sa. */
+  function crossSects(al, f, warn) {
+    var out = [];
+    kids(al, "CrossSects").forEach(function (cs) {
+      kids(cs, "CrossSect").forEach(function (x) {
+        var sta = attrNum(x, "sta");
+        if (sta == null || !isFinite(sta)) return;
+        if (attrNum(x, "angleSkew")) warn("šikmé priečne rezy (angleSkew) sa kreslia kolmo na trasu");
+        var surfs = [], links = new Map(), seen = new Set();
+        kids(x).forEach(function (el) {
+          var t = el.localName, pts = [], name = el.getAttribute("name") || "";
+          if (t === "CrossSectSurf") {
+            var n = nums((kid(el, "PntList2D") || {}).textContent);
+            for (var i = 0; i + 1 < n.length; i += 2) pts.push([n[i] * f, n[i + 1] * f]);
+          } else if (t === "DesignCrossSectSurf") {
+            kids(el, "CrossSectPnt").forEach(function (p) {
+              if (/slope/i.test(p.getAttribute("dataFormat") || "")) { warn("body rezu vo formáte „Slope Distance“ sa nepodporujú"); return; }
+              var q = nums(p.textContent);
+              if (q.length >= 2 && isFinite(q[0]) && isFinite(q[1])) pts.push([q[0] * f, q[1] * f]);
+            });
+          } else return;
+          // ten istý bod dvakrát za sebou (Civil 3D v tvaroch nad priekopou) — stena nulovej plochy
+          pts = pts.filter(function (p, i) { return !i || !same(p, pts[i - 1]); });
+          var design = t === "DesignCrossSectSurf", closed = design && el.getAttribute("closedArea") === "true";
+          // uzavretá plocha môže mať prvý bod zopakovaný na konci
+          if (closed && pts.length > 2 && same(pts[0], pts[pts.length - 1])) pts.pop();
+          if (pts.length < (closed ? 3 : 2)) return;
+          // Civil 3D pri prekrývajúcich sa regiónoch koridoru zapíše ten istý tvar dvakrát
+          var sig = t + "|" + name + "|" + closed + "|" + pts.map(function (p) { return p[0].toFixed(4) + " " + p[1].toFixed(4); }).join(";");
+          if (seen.has(sig)) return;
+          seen.add(sig);
+          var sf = { name: name || (closed ? "tvar" : "povrch"), design: design, closed: closed,
+                     side: el.getAttribute("side") || "", material: el.getAttribute("material") || "", pts: pts };
+          if (!design || closed) { surfs.push(sf); return; }
+          if (!name) return;
+          if (!links.has(name)) links.set(name, []);
+          links.get(name).push(sf);
+        });
+        links.forEach(function (list) { chainLinks(list).forEach(function (sf) { surfs.push(sf); }); });
+        conform(surfs.filter(function (sf) { return sf.closed; }));
+        if (surfs.length) out.push({ sta: sta * f, name: x.getAttribute("name") || "", surfs: surfs });
+      });
+    });
+    return out.sort(function (a, b) { return a.sta - b.sta; });
+  }
+  function same(a, b) { return Math.abs(a[0] - b[0]) < 1e-5 && Math.abs(a[1] - b[1]) < 1e-5; }
+  /* Uzavreté tvary rezu na seba nadväzujú, ale hrana jedného môže viesť cez vrchol
+     susedného (T-spoj: spodok krajnice cez roh humusu a dosypu). Pri spájaní rezov
+     by sa taká hrana ohla inak ako hrany susedov a medzi tvarmi by vznikla škára —
+     preto sa do hrany vložia vrcholy susedov, ktoré na nej ležia. */
+  function conform(shapes) {
+    var all = [];
+    shapes.forEach(function (sf, k) { sf.pts.forEach(function (p) { all.push([p[0], p[1], k]); }); });
+    shapes.forEach(function (sf, k) {
+      var P = sf.pts, out = [];
+      for (var e = 0; e < P.length; e++) {
+        var a = P[e], b = P[(e + 1) % P.length], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+        out.push(a);
+        if (l2 < 1e-10) continue;
+        var ins = [];
+        all.forEach(function (v) {
+          if (v[2] === k) return;
+          var t = ((v[0] - a[0]) * dx + (v[1] - a[1]) * dy) / l2;
+          if (t <= 1e-6 || t >= 1 - 1e-6) return;
+          var px = a[0] + dx * t - v[0], py = a[1] + dy * t - v[1];
+          if (px * px + py * py < 1e-8) ins.push([t, v[0], v[1]]);     // do 0,1 mm od hrany
+        });
+        ins.sort(function (u, w) { return u[0] - w[0]; }).forEach(function (u) {
+          var last = out[out.length - 1];
+          if (!same(last, [u[1], u[2]]) && !same(b, [u[1], u[2]])) out.push([u[1], u[2]]);
+        });
+      }
+      sf.pts = out;
+    });
+  }
+  /* Spojnice s rovnakým názvom → lomené čiary (napájajú sa na spoločné koncové body). */
+  function chainLinks(list) {
+    var lines = list.map(function (sf) { return sf.pts.slice(); }), merged = true;
+    while (merged) {
+      merged = false;
+      for (var i = 0; i < lines.length && !merged; i++) {
+        for (var j = 0; j < lines.length && !merged; j++) {
+          if (i === j) continue;
+          var A = lines[i], B = lines[j];
+          if (same(A[A.length - 1], B[0])) lines[i] = A.concat(B.slice(1));
+          else if (same(A[A.length - 1], B[B.length - 1])) lines[i] = A.concat(B.slice(0, -1).reverse());
+          else if (same(A[0], B[B.length - 1])) lines[i] = B.concat(A.slice(1));
+          else if (same(A[0], B[0])) lines[i] = B.slice().reverse().concat(A.slice(1));
+          else continue;
+          lines.splice(j, 1); merged = true;
+        }
+      }
+    }
+    return lines.map(function (pts) {
+      return { name: list[0].name, design: true, closed: false, side: "", material: list[0].material, pts: pts };
+    });
   }
 
   // ---- povrchy TIN -----------------------------------------------------------
@@ -261,7 +370,8 @@
       if (kid(al, "StaEquation")) warn("rovnice staničenia (StaEquation) sa neuplatňujú");
       alignments.push({ name: al.getAttribute("name") || "trasa " + (i + 1), desc: al.getAttribute("desc") || "",
         staStart: staStart, hs: hs, vs: vs, profile: pa ? pa.getAttribute("name") || "" : "",
-        speeds: speeds(al, f), speedUnit: sys && sys.localName === "Imperial" ? "mph" : "km/h" });
+        speeds: speeds(al, f), speedUnit: sys && sys.localName === "Imperial" ? "mph" : "km/h",
+        sections: crossSects(al, f, warn) });
     });
 
     var surfaces = [];
